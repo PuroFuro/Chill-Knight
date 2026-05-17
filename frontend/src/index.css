@@ -1,0 +1,36 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  background: #0f1117;
+  color: #e5e7eb;
+  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  overflow: hidden;
+}
+
+@layer components {
+  .ck-btn {
+    @apply rounded-md bg-knight-panel2 px-4 py-2 font-medium text-gray-100
+           transition-colors hover:bg-knight-accent2/30 disabled:opacity-40
+           disabled:hover:bg-knight-panel2;
+  }
+  .ck-btn-primary {
+    @apply rounded-md bg-knight-accent2 px-4 py-2 font-semibold text-knight-bg
+           transition-opacity hover:opacity-90 disabled:opacity-40;
+  }
+  .ck-input {
+    @apply w-full rounded-md border border-white/10 bg-knight-bg px-3 py-2
+           text-gray-100 outline-none focus:border-knight-accent2;
+  }
+  .ck-panel {
+    @apply rounded-lg border border-white/10 bg-knight-panel/90 backdrop-blur;
+  }
+}

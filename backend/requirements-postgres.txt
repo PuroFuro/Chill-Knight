@@ -1,0 +1,4 @@
+# Install when you point DATABASE_URL at PostgreSQL:
+#   pip install -r requirements-postgres.txt
+# (Needs a C toolchain only if no prebuilt wheel exists for your Python.)
+asyncpg>=0.30

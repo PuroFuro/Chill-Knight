@@ -1,0 +1,17 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python -m venv .venv)",
+      "Bash(./.venv/Scripts/python.exe -m pip install --upgrade pip -q)",
+      "Bash(./.venv/Scripts/python.exe -m pip install -r requirements.txt -q)",
+      "Bash(./.venv/Scripts/python.exe -m pip install -q \"pydantic>=2.11\" \"fastapi>=0.115\")",
+      "Bash(./.venv/Scripts/python.exe -c \"import pydantic, pydantic_core, fastapi; print\\('pydantic', pydantic.VERSION\\); print\\('fastapi', fastapi.__version__\\)\")",
+      "Bash(./.venv/Scripts/python.exe -m pip install -q -r requirements.txt)",
+      "Bash(./.venv/Scripts/python.exe -c \"import app.main as m; print\\('import OK'\\); print\\('routes:', sorted\\({r.path for r in m.app.routes if hasattr\\(r,'path'\\)}\\)\\)\")",
+      "Bash(npm install *)",
+      "Bash(npm run *)",
+      "Bash(./.venv/Scripts/python.exe -c ' *)",
+      "Bash(git check-ignore *)"
+    ]
+  }
+}

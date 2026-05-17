@@ -1,0 +1,15 @@
+# Core runtime. Pins are lower bounds so prebuilt wheels are picked for
+# whatever Python you run (tested on 3.12 and 3.14).
+fastapi>=0.115
+uvicorn[standard]>=0.32
+sqlalchemy>=2.0.36
+aiosqlite>=0.20
+bcrypt>=4.2
+itsdangerous>=2.2
+pydantic>=2.11
+pydantic-settings>=2.6
+python-dotenv>=1.0
+
+# PostgreSQL driver (the spec's target DB). Installed separately because it
+# is a C extension without wheels for every brand-new Python release:
+#   pip install -r requirements-postgres.txt
