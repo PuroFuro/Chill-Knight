@@ -381,7 +381,7 @@ class World:
             recipients.append(by)
         for rt in recipients:
             leveled = rt.profile.grant(exp, gold)
-            rt.push_event("reward", exp=exp, gold=gold)
+            rt.push_event("reward", exp=exp, gold=gold, x=e.x, y=e.y)
             for lvl in leveled:
                 rt.hp = rt.profile.max_hp
                 rt.push_event("levelup", level=lvl)

@@ -4,6 +4,16 @@ import type { Snapshot } from "../types";
 
 const ARENA = { w: 1600, h: 1000 };
 
+// How long a dropped gold/exp pickup takes to fly into the player.
+const PICKUP_MS = 650;
+
+interface Pickup {
+  kind: "gold" | "exp";
+  sx: number; // world-space spawn point (enemy death + scatter)
+  sy: number;
+  born: number;
+}
+
 export default function GameCanvas({
   client,
   snapshotRef,
@@ -17,6 +27,26 @@ export default function GameCanvas({
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const mouse = useRef({ x: 0, y: 0, down: false });
+  const pickups = useRef<Pickup[]>([]);
+
+  // Spawn gold (yellow) + exp (green) pickups at each kill that drift to the
+  // player. Driven by the authoritative "reward" event, which carries the
+  // enemy's death position.
+  useEffect(() => {
+    const off = client.on((msg) => {
+      if (msg.type !== "event" || msg.kind !== "reward") return;
+      const ex = msg.x as number | undefined;
+      const ey = msg.y as number | undefined;
+      if (typeof ex !== "number" || typeof ey !== "number") return;
+      const now = performance.now();
+      const jitter = () => (Math.random() - 0.5) * 28;
+      if ((msg.gold as number) > 0)
+        pickups.current.push({ kind: "gold", sx: ex + jitter(), sy: ey + jitter(), born: now });
+      if ((msg.exp as number) > 0)
+        pickups.current.push({ kind: "exp", sx: ex + jitter(), sy: ey + jitter(), born: now });
+    });
+    return off;
+  }, [client]);
 
   // ---- input ----------------------------------------------------------
   useEffect(() => {
@@ -248,6 +278,27 @@ export default function GameCanvas({
           ctx.fillStyle = "#e5e7eb";
           ctx.font = "12px sans-serif";
           ctx.fillText(p.chat, px, py - 43);
+        }
+      }
+
+      // gold/exp pickups: drop at the kill site, then pull to the player.
+      if (pickups.current.length) {
+        const now = performance.now();
+        const tx = me ? me.x : camX;
+        const ty = me ? me.y : camY;
+        pickups.current = pickups.current.filter((pk) => now - pk.born < PICKUP_MS);
+        for (const pk of pickups.current) {
+          const t = (now - pk.born) / PICKUP_MS;
+          const ease = t * t; // accelerate toward the player
+          const wx = pk.sx + (tx - pk.sx) * ease;
+          const wy = pk.sy + (ty - pk.sy) * ease;
+          ctx.fillStyle = pk.kind === "gold" ? "#fde047" : "#4ade80";
+          ctx.shadowColor = ctx.fillStyle;
+          ctx.shadowBlur = 10;
+          ctx.beginPath();
+          ctx.arc(sx(wx), sy(wy), 5, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.shadowBlur = 0;
         }
       }
 

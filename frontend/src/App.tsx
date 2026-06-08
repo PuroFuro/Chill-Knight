@@ -3,7 +3,10 @@ import { api } from "./api";
 import Auth from "./components/Auth";
 import ChatPanel, { type ChatLine } from "./components/ChatPanel";
 import Hud, { type GameEvent } from "./components/Hud";
+import KillPopups, { type KillPopup } from "./components/KillPopups";
+import LeaderboardToggle from "./components/LeaderboardToggle";
 import Lobby from "./components/Lobby";
+import MenuButtons from "./components/MenuButtons";
 import GameCanvas from "./game/GameCanvas";
 import { GameClient } from "./net/socket";
 import type { Player, ServerMsg, Snapshot, StatsMsg } from "./types";
@@ -24,6 +27,7 @@ export default function App() {
   const [boss, setBoss] = useState<{ hp: number; maxHp: number } | null>(null);
   const [events, setEvents] = useState<GameEvent[]>([]);
   const [chat, setChat] = useState<ChatLine[]>([]);
+  const [popups, setPopups] = useState<KillPopup[]>([]);
 
   const clientRef = useRef<GameClient | null>(null);
   const snapshotRef = useRef<Snapshot | null>(null);
@@ -36,6 +40,14 @@ export default function App() {
       setEvents((es) => [...es.slice(-8), { id: seqRef.current++, text, tone }]),
     []
   );
+
+  // Floating "+gold / +exp" popups above the player — capped to the last 5,
+  // each clearing itself once its rise-and-fade animation finishes.
+  const pushPopup = useCallback((kind: KillPopup["kind"], amount: number) => {
+    const id = seqRef.current++;
+    setPopups((ps) => [...ps.slice(-4), { id, kind, amount }]);
+    setTimeout(() => setPopups((ps) => ps.filter((p) => p.id !== id)), 1500);
+  }, []);
 
   // resume an existing session
   useEffect(() => {
@@ -59,6 +71,7 @@ export default function App() {
     setBoss(null);
     setChat([]);
     setEvents([]);
+    setPopups([]);
     if (token) {
       try {
         setPlayer(await api.me(token));
@@ -92,6 +105,26 @@ export default function App() {
           break;
         case "stats":
           setStats(msg);
+          // Keep the cached player roughly in sync with live stats so the
+          // overworld shop sees current gold/level/gear (owned_weapons only
+          // changes via the REST buy path, so it's preserved here).
+          setPlayer((p) =>
+            p
+              ? {
+                  ...p,
+                  level: msg.level,
+                  exp: msg.exp,
+                  exp_to_next: msg.expToNext,
+                  gold: msg.gold,
+                  weapon: msg.weapon,
+                  potions: msg.potions,
+                  cleared_raid: msg.clearedRaid,
+                  max_hp: msg.maxHp,
+                  attack: msg.attack,
+                  crit_chance: msg.critChance,
+                }
+              : p
+          );
           break;
         case "chat":
           setChat((c) => [
@@ -106,6 +139,10 @@ export default function App() {
           ]);
           break;
         case "event":
+          if (msg.kind === "reward") {
+            if ((msg.gold as number) > 0) pushPopup("gold", msg.gold as number);
+            if ((msg.exp as number) > 0) pushPopup("exp", msg.exp as number);
+          }
           handleGameEvent(msg, pushEvent);
           break;
         case "world_closed":
@@ -123,7 +160,7 @@ export default function App() {
       }
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [player, pushEvent, backToLobby]
+    [player, pushEvent, pushPopup, backToLobby]
   );
 
   async function enterGame(
@@ -145,11 +182,28 @@ export default function App() {
     setBoss(null);
     setEvents([]);
     setChat([]);
+    setPopups([]);
     snapshotRef.current = null;
     inputEnabledRef.current = true;
     setMeta({ mode, difficulty, code: code ?? null });
     setScreen("game");
     client.joinWorld(mode, difficulty, code);
+  }
+
+  // Hop straight into a friend's raid from the overworld. The server detaches
+  // us from the current world before adding us to the raid, so we're never in
+  // two worlds at once.
+  function joinRaidFromGame(code: string) {
+    const client = clientRef.current;
+    if (!client) return;
+    setStats(null);
+    setBoss(null);
+    setEvents([]);
+    setChat([]);
+    setPopups([]);
+    snapshotRef.current = null;
+    inputEnabledRef.current = true;
+    client.joinWorld("raid", meta.difficulty, code);
   }
 
   function doLogout() {
@@ -205,7 +259,24 @@ export default function App() {
           backToLobby();
         }}
         onPotion={() => clientRef.current?.usePotion()}
+        onJoinRaid={joinRaidFromGame}
+        onTypingChange={(typing) => {
+          inputEnabledRef.current = !typing;
+        }}
       />
+
+      {/* Shop / How-to-play buttons, tucked below the top-left vitals panel. */}
+      {player && (
+        <div className="absolute left-4 top-32">
+          <MenuButtons token={token} player={player} onPlayer={setPlayer} />
+        </div>
+      )}
+
+      {/* Leaderboard pop-out lives in the overworld only. */}
+      {meta.mode === "overworld" && <LeaderboardToggle />}
+
+      <KillPopups popups={popups} />
+
       <ChatPanel
         lines={chat}
         myDifficulty={meta.difficulty}

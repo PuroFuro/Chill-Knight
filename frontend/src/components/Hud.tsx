@@ -1,3 +1,4 @@
+import { useState } from "react";
 import type { StatsMsg } from "../types";
 
 export interface GameEvent {
@@ -13,6 +14,8 @@ export default function Hud({
   events,
   onLeave,
   onPotion,
+  onJoinRaid,
+  onTypingChange,
 }: {
   stats: StatsMsg | null;
   meta: { mode: string; difficulty: number; code: string | null };
@@ -20,7 +23,10 @@ export default function Hud({
   events: GameEvent[];
   onLeave: () => void;
   onPotion: () => void;
+  onJoinRaid: (code: string) => void;
+  onTypingChange: (typing: boolean) => void;
 }) {
+  const [raidCode, setRaidCode] = useState("");
   const hpPct = stats ? stats.hp / stats.maxHp : 0;
   const expPct =
     stats && stats.expToNext > 0 ? stats.exp / stats.expToNext : 1;
@@ -60,8 +66,8 @@ export default function Hud({
         </div>
       </div>
 
-      {/* top-center: world / raid info */}
-      <div className="absolute left-1/2 top-4 -translate-x-1/2">
+      {/* top-center: world / raid info + (overworld) raid-code join */}
+      <div className="absolute left-1/2 top-4 flex -translate-x-1/2 items-start gap-2">
         <div className="ck-panel px-4 py-2 text-center">
           <div className="text-sm font-semibold capitalize text-knight-accent">
             {meta.mode} · Difficulty {meta.difficulty}
@@ -81,6 +87,34 @@ export default function Hud({
             </div>
           )}
         </div>
+
+        {meta.mode === "overworld" && (
+          <form
+            className="ck-panel flex items-center gap-1.5 px-2 py-2"
+            onSubmit={(e) => {
+              e.preventDefault();
+              const c = raidCode.trim();
+              if (c.length >= 4) onJoinRaid(c);
+            }}
+          >
+            <input
+              className="ck-input w-24 px-2 py-1 text-sm uppercase"
+              placeholder="RAID CODE"
+              maxLength={5}
+              value={raidCode}
+              onChange={(e) => setRaidCode(e.target.value.toUpperCase())}
+              onFocus={() => onTypingChange(true)}
+              onBlur={() => onTypingChange(false)}
+            />
+            <button
+              type="submit"
+              className="ck-btn px-2 py-1 text-xs"
+              disabled={raidCode.trim().length < 4}
+            >
+              Join Raid
+            </button>
+          </form>
+        )}
       </div>
 
       {/* top-right: leave */}
