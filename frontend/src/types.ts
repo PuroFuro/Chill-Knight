@@ -23,6 +23,7 @@ export interface ShopItem {
   crit_bonus: number;
   requires_raid: number;
   description: string;
+  passive: string;
 }
 
 export interface LeaderboardEntry {

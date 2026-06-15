@@ -155,10 +155,10 @@ class World:
                 rt.parry_active = C.PARRY_DURATION
                 rt.parry_cd = C.PARRY_COOLDOWN
 
-            # start a slash
+            # start a slash (cooldown shortened by the "swift" weapon passive)
             if rt.in_attack and rt.attack_cd <= 0 and rt.attack_active <= 0:
                 rt.attack_active = C.ATTACK_ACTIVE
-                rt.attack_cd = C.ATTACK_COOLDOWN
+                rt.attack_cd = C.ATTACK_COOLDOWN * C.weapon_passive(rt.profile.weapon)["cd_mult"]
                 rt.attack_hit_ids = set()
 
             if rt.attack_active > 0:
@@ -184,7 +184,21 @@ class World:
             if rt.counter_ready > 0:
                 dmg *= C.PARRY_BONUS
                 rt.counter_ready = 0.0
+
+            # --- weapon passives ---
+            pw = C.weapon_passive(rt.profile.weapon)
+            # "execute": bonus damage to low-HP enemies (checked pre-hit)
+            if pw["key"] == "execute" and e.hp <= C.EXECUTE_THRESHOLD * e.max_hp:
+                dmg *= C.EXECUTE_BONUS
             self._damage_enemy(e, dmg, rt, crit)
+            if pw["key"] == "lifesteal" and not rt.dead and rt.hp > 0:
+                rt.hp = min(rt.profile.max_hp, rt.hp + dmg * C.LIFESTEAL_PCT)
+            elif pw["key"] == "frost":
+                e.slow_timer = C.FROST_SLOW_TIME
+            elif pw["key"] == "burn":
+                e.burn_timer = C.BURN_TIME
+                e.burn_dps = (rt.profile.attack * C.BURN_PCT) / C.BURN_TIME
+                e.burn_by = rt
 
     def _respawn(self, rt: PlayerRT) -> None:
         rt.dead = False
@@ -249,7 +263,23 @@ class World:
         return best
 
     def _tick_enemies(self, dt: float) -> None:
-        for e in self.enemies:
+        # iterate a copy: burn damage-over-time can kill (and remove) enemies
+        for e in list(self.enemies):
+            if e.slow_timer > 0:
+                e.slow_timer -= dt
+            if e.burn_timer > 0:
+                e.burn_timer -= dt
+                e.hp -= e.burn_dps * dt
+                if e.hp <= 0:
+                    by = e.burn_by
+                    if by is None or by.profile.id not in self.players or not by.alive:
+                        by = self._nearest_player(e)
+                    if by is not None:
+                        self._kill_enemy(e, by)
+                    elif e in self.enemies:
+                        self.enemies.remove(e)
+                    continue
+
             target = self._nearest_player(e)
             if target is None:
                 continue
@@ -281,8 +311,9 @@ class World:
 
     def _move(self, e: Enemy, target: PlayerRT, sign: int, dt: float) -> None:
         ang = math.atan2(target.y - e.y, target.x - e.x)
-        e.x += math.cos(ang) * e.speed * sign * dt
-        e.y += math.sin(ang) * e.speed * sign * dt
+        spd = e.speed * (C.FROST_SLOW_MULT if e.slow_timer > 0 else 1.0)
+        e.x += math.cos(ang) * spd * sign * dt
+        e.y += math.sin(ang) * spd * sign * dt
         e.x = max(10, min(C.ARENA_W - 10, e.x))
         e.y = max(10, min(C.ARENA_H - 10, e.y))
 

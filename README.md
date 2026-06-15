@@ -11,7 +11,7 @@ and climb the leaderboard.
 | -------- | ----------------------------------------------------- |
 | Backend  | Python · FastAPI · WebSockets · authoritative game loop |
 | Frontend | TypeScript · React · Vite · TailwindCSS · Canvas 2D   |
-| Database | PostgreSQL (SQLite fallback for zero-setup local dev) |
+| Database | Supabase (Postgres) · SQLite fallback for zero-setup local dev |
 
 ---
 
@@ -60,21 +60,37 @@ npm run dev
 
 ---
 
-## Using PostgreSQL (recommended / production)
+## Using Supabase (recommended / production)
 
-The spec calls for PostgreSQL. SQLite is only a convenience fallback.
+Accounts live in Supabase's hosted Postgres. The FastAPI backend still runs the
+auth (bcrypt + signed tokens) and the realtime game loop — Supabase is just the
+database, which means you can browse and edit player data with SQL right in the
+Supabase dashboard.
 
-```bash
-docker compose up -d        # starts postgres:16 on :5432
-```
+> 📖 **Step-by-step walkthrough: [`SUPABASE_SETUP.md`](SUPABASE_SETUP.md)** —
+> creating the project, getting the right connection string, and running SQL on
+> your data. The short version is below.
 
-Then in `backend/.env`:
+1. Create a project at [supabase.com](https://supabase.com).
+2. In the dashboard go to **Settings → Database → Connection string** and copy
+   the **URI**. Swap the scheme `postgresql://` for `postgresql+asyncpg://`.
+3. Put it in `backend/.env`:
 
-```
-DATABASE_URL=postgresql+asyncpg://chill:chill@localhost:5432/chill_knight
-```
+   ```
+   DATABASE_URL=postgresql+asyncpg://postgres:<PASSWORD>@db.<REF>.supabase.co:5432/postgres
+   ```
 
-Restart the backend — tables are created automatically on startup.
+   (For serverless/pooled hosting use the **transaction pooler** host on port
+   `6543`; asyncpg's prepared-statement cache is auto-disabled for Supabase URLs
+   so pgbouncer works.)
+4. Restart the backend — the `players` table is created automatically on
+   startup. Open the Supabase **SQL Editor** and run `select * from players;` to
+   see live accounts.
+
+> SQLite is still the zero-setup fallback for local dev: leave `DATABASE_URL`
+> unset (or pointed at the SQLite file) and everything runs with no external DB.
+> The old `docker-compose.yml` (a local Postgres) remains for anyone who prefers
+> self-hosting, but Supabase is the recommended path.
 
 ---
 
@@ -87,8 +103,10 @@ Restart the backend — tables are created automatically on startup.
 | Slash attack    | Left-click / `J`              |
 | Parry           | `Space` / `K`                 |
 | Drink potion    | `H`                           |
-| Chat            | `Enter` (Esc to cancel)       |
-| Leave world     | "Leave" button (top-right)    |
+| Chat            | `T` (Esc to cancel)           |
+| Menu            | `Esc` or the ☰ button (top-left) |
+| Leaderboard     | `L` (top-right)               |
+| Leave / Logout  | via the menu                  |
 
 **Parry:** when an enemy flashes (winding up), parry to negate the hit and
 charge a powered-up counter — your next slash deals bonus damage.
@@ -114,7 +132,9 @@ charge a powered-up counter — your next slash deals bonus damage.
 - **Social** – chat as floating bubbles plus a side feed showing each
   speaker's difficulty/location, with a "only my level" filter.
 - **Leaderboard** – top knights by level, highest raid cleared, and gold.
-- **Shop** – weapons (some gated behind raid clears) and health potions.
+- **Shop** – weapons (some gated behind raid clears) and health potions. Each
+  weapon carries a passive: lifesteal, faster attacks, frost-slow, burn DoT, or
+  an execute bonus vs low-HP enemies.
 - **Enemies** – melee + ranged, random spawns; spawn rate scales with the
   number of players, stats scale with world difficulty.
 

@@ -16,7 +16,7 @@ export default function KillPopups({ popups }: { popups: KillPopup[] }) {
           <div
             key={p.id}
             className={`ck-pop text-sm font-bold ${
-              p.kind === "gold" ? "text-knight-gold" : "text-green-400"
+              p.kind === "gold" ? "text-gold" : "text-hp"
             }`}
           >
             +{p.amount}

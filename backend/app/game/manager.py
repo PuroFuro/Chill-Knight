@@ -17,7 +17,8 @@ _LOOP_DT = 1.0 / C.TICK_RATE
 
 
 def _gen_code() -> str:
-    return "".join(random.choices(string.ascii_uppercase + string.digits, k=5))
+    # 4-character invite code (matches the 4-box raid join UI).
+    return "".join(random.choices(string.ascii_uppercase + string.digits, k=4))
 
 
 class Connection:
@@ -151,9 +152,13 @@ class GameManager:
         w = self._world_for(conn)
         if not w:
             return
+        # The chat bubble above the speaker stays world-local (it lives in the
+        # snapshot), but the chat *feed* is global: send to every connected
+        # player so people in different worlds still see each other. The line
+        # carries the speaker's world number for context.
         broadcast = w.handle_chat(conn.profile.id, text)
         if broadcast:
-            for c in self._conns_in(w.key):
+            for c in self.connections.values():
                 c.send(broadcast)
 
     def on_use_potion(self, conn: Connection) -> None:

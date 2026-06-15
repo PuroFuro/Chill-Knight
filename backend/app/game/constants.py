@@ -30,6 +30,16 @@ RAID_HEAL_LIMIT = 3  # potions usable per player per raid
 DEATH_GOLD_LOSS = 0.10
 DEATH_EXP_LOSS = 0.10
 
+# --- Weapon passives (tunables) ------------------------------------------
+LIFESTEAL_PCT = 0.08  # iron_blade: heal this fraction of melee damage dealt
+SWIFT_CD_MULT = 0.85  # knights_saber: attack cooldown multiplier (faster)
+FROST_SLOW_MULT = 0.6  # frost_edge: struck enemy moves at this fraction of speed
+FROST_SLOW_TIME = 1.5  # frost_edge: how long the slow lasts (seconds)
+BURN_TIME = 2.0  # dragonfang: burn duration (seconds)
+BURN_PCT = 0.30  # dragonfang: total burn damage as a fraction of attack
+EXECUTE_THRESHOLD = 0.30  # eclipse: enemies below this HP fraction...
+EXECUTE_BONUS = 1.35  # eclipse: ...take this damage multiplier
+
 
 def max_hp(level: int) -> int:
     return 100 + (level - 1) * 16
@@ -113,36 +123,67 @@ def first_clear_bonus_gold(difficulty: int) -> int:
 
 # --- Shop catalog ---------------------------------------------------------
 # requires_raid = highest raid difficulty that must have been cleared to buy.
+# Each weapon's `passive` is a small dict the combat code reads:
+#   key     — which effect to apply ("none" | "lifesteal" | "swift" | ...)
+#   name    — display name
+#   desc    — display description
+#   cd_mult — attack-cooldown multiplier (only "swift" differs from 1.0)
+_NO_PASSIVE = {"key": "none", "name": "None", "desc": "No special passive.", "cd_mult": 1.0}
+
 WEAPONS: dict[str, dict] = {
     "rusty_sword": {
         "name": "Rusty Sword", "price": 0, "attack": 0,
         "crit_bonus": 0.00, "requires_raid": 0,
         "description": "The blade every knight starts with. Reliable, dull.",
+        "passive": _NO_PASSIVE,
     },
     "iron_blade": {
         "name": "Iron Blade", "price": 220, "attack": 8,
         "crit_bonus": 0.02, "requires_raid": 0,
         "description": "Solid steel. A noticeable step up from rust.",
+        "passive": {
+            "key": "lifesteal", "name": "Bloodletter", "cd_mult": 1.0,
+            "desc": f"Heal for {int(LIFESTEAL_PCT * 100)}% of the melee damage you deal.",
+        },
     },
     "knights_saber": {
         "name": "Knight's Saber", "price": 700, "attack": 18,
         "crit_bonus": 0.05, "requires_raid": 0,
         "description": "Balanced and sharp, favoured by veteran knights.",
+        "passive": {
+            "key": "swift", "name": "Swift", "cd_mult": SWIFT_CD_MULT,
+            "desc": f"Attack {int((1 - SWIFT_CD_MULT) * 100)}% faster.",
+        },
     },
     "frost_edge": {
         "name": "Frost Edge", "price": 1600, "attack": 30,
         "crit_bonus": 0.08, "requires_raid": 5,
         "description": "Chills foes to the bone. Requires raid 5 cleared.",
+        "passive": {
+            "key": "frost", "name": "Frostbite", "cd_mult": 1.0,
+            "desc": f"Struck enemies are slowed by {int((1 - FROST_SLOW_MULT) * 100)}% "
+                    f"for {FROST_SLOW_TIME:g}s.",
+        },
     },
     "dragonfang": {
         "name": "Dragonfang", "price": 4200, "attack": 52,
         "crit_bonus": 0.12, "requires_raid": 15,
         "description": "Forged from a raid-boss fang. Requires raid 15 cleared.",
+        "passive": {
+            "key": "burn", "name": "Searing", "cd_mult": 1.0,
+            "desc": f"Hits ignite enemies for {int(BURN_PCT * 100)}% of your attack "
+                    f"over {BURN_TIME:g}s.",
+        },
     },
     "eclipse_greatsword": {
         "name": "Eclipse Greatsword", "price": 11000, "attack": 90,
         "crit_bonus": 0.18, "requires_raid": 30,
         "description": "A legend among knights. Requires raid 30 cleared.",
+        "passive": {
+            "key": "execute", "name": "Eclipse", "cd_mult": 1.0,
+            "desc": f"Deal +{int((EXECUTE_BONUS - 1) * 100)}% damage to enemies below "
+                    f"{int(EXECUTE_THRESHOLD * 100)}% HP.",
+        },
     },
 }
 
@@ -155,3 +196,16 @@ POTION = {
 
 def weapon_stats(key: str) -> dict:
     return WEAPONS.get(key, WEAPONS["rusty_sword"])
+
+
+def weapon_passive(key: str) -> dict:
+    """The mechanical passive dict for a weapon (defaults to no passive)."""
+    return weapon_stats(key).get("passive", _NO_PASSIVE)
+
+
+def passive_text(key: str) -> str:
+    """Human-readable passive line for the shop / inventory UI."""
+    p = weapon_passive(key)
+    if p["key"] == "none":
+        return "None"
+    return f"{p['name']} — {p['desc']}"

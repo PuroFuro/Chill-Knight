@@ -114,6 +114,11 @@ class Enemy:
     windup_timer: float = 0.0  # >0 while telegraphing (parry window for player)
     target_id: int | None = None
     facing: float = 0.0
+    # weapon-passive status effects applied by players
+    slow_timer: float = 0.0  # >0 while frost-slowed
+    burn_timer: float = 0.0  # >0 while burning (damage over time)
+    burn_dps: float = 0.0  # burn damage per second
+    burn_by: "PlayerRT | None" = None  # who applied the burn (reward attribution)
 
 
 @dataclass

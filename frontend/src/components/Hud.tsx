@@ -1,4 +1,3 @@
-import { useState } from "react";
 import type { StatsMsg } from "../types";
 
 export interface GameEvent {
@@ -7,135 +6,97 @@ export interface GameEvent {
   tone: "good" | "bad" | "info";
 }
 
+/**
+ * Overworld HUD: the world title (top-center) and the player's vitals
+ * (bottom-right) — gold, level, EXP and Health bars. (See
+ * reference-design/Overworld.png.) Crit chance is intentionally omitted.
+ */
 export default function Hud({
   stats,
   meta,
   boss,
   events,
-  onLeave,
   onPotion,
-  onJoinRaid,
-  onTypingChange,
 }: {
   stats: StatsMsg | null;
   meta: { mode: string; difficulty: number; code: string | null };
   boss: { hp: number; maxHp: number } | null;
   events: GameEvent[];
-  onLeave: () => void;
   onPotion: () => void;
-  onJoinRaid: (code: string) => void;
-  onTypingChange: (typing: boolean) => void;
 }) {
-  const [raidCode, setRaidCode] = useState("");
   const hpPct = stats ? stats.hp / stats.maxHp : 0;
-  const expPct =
-    stats && stats.expToNext > 0 ? stats.exp / stats.expToNext : 1;
+  const expPct = stats && stats.expToNext > 0 ? stats.exp / stats.expToNext : 1;
+  const title = meta.mode === "raid" ? "Raid" : "Overworld";
 
   return (
     <>
-      {/* top-left vitals */}
-      <div className="pointer-events-none absolute left-4 top-4 w-72">
-        <div className="ck-panel pointer-events-auto p-3">
-          <div className="mb-1 flex items-center justify-between text-sm">
-            <span className="font-bold text-knight-accent2">
-              Lv {stats?.level ?? "-"}
-            </span>
-            <span className="text-knight-gold">{stats?.gold ?? 0}g</span>
+      {/* top-center: world title + (raid) code + boss bar */}
+      <div className="pointer-events-none absolute left-1/2 top-5 -translate-x-1/2 text-center">
+        <h2 className="font-display text-3xl font-bold text-ink">
+          {title} - Difficulty {meta.difficulty}
+        </h2>
+        {meta.mode === "raid" && meta.code && (
+          <div className="mt-1 text-sm text-muted">
+            Raid code: <span className="font-bold text-ink">{meta.code}</span>
           </div>
-          <Meter pct={hpPct} color="bg-green-500" label={`HP ${stats?.hp ?? 0}/${stats?.maxHp ?? 0}`} />
-          <div className="h-1.5" />
-          <Meter
-            pct={expPct}
-            color="bg-knight-accent2"
-            label={
-              stats && stats.expToNext > 0
-                ? `EXP ${stats.exp}/${stats.expToNext}`
-                : "EXP MAX"
-            }
-          />
-          <div className="mt-2 flex items-center justify-between text-xs text-gray-400">
-            <span>ATK {stats?.attack ?? 0}</span>
-            <span>Crit {Math.round((stats?.critChance ?? 0) * 100)}%</span>
-            <button
-              className="pointer-events-auto rounded bg-knight-panel2 px-2 py-0.5 text-gray-200 hover:bg-knight-accent2/30"
-              onClick={onPotion}
-            >
-              🧪 {stats?.potions ?? 0} (H)
-            </button>
-          </div>
-        </div>
-      </div>
-
-      {/* top-center: world / raid info + (overworld) raid-code join */}
-      <div className="absolute left-1/2 top-4 flex -translate-x-1/2 items-start gap-2">
-        <div className="ck-panel px-4 py-2 text-center">
-          <div className="text-sm font-semibold capitalize text-knight-accent">
-            {meta.mode} · Difficulty {meta.difficulty}
-          </div>
-          {meta.mode === "raid" && meta.code && (
-            <div className="text-xs text-gray-400">
-              Invite code: <span className="font-mono text-knight-gold">{meta.code}</span>
-            </div>
-          )}
-          {boss && (
-            <div className="mt-1 w-64">
-              <Meter
-                pct={boss.hp / boss.maxHp}
-                color="bg-purple-500"
-                label={`BOSS ${boss.hp}/${boss.maxHp}`}
-              />
-            </div>
-          )}
-        </div>
-
-        {meta.mode === "overworld" && (
-          <form
-            className="ck-panel flex items-center gap-1.5 px-2 py-2"
-            onSubmit={(e) => {
-              e.preventDefault();
-              const c = raidCode.trim();
-              if (c.length >= 4) onJoinRaid(c);
-            }}
-          >
-            <input
-              className="ck-input w-24 px-2 py-1 text-sm uppercase"
-              placeholder="RAID CODE"
-              maxLength={5}
-              value={raidCode}
-              onChange={(e) => setRaidCode(e.target.value.toUpperCase())}
-              onFocus={() => onTypingChange(true)}
-              onBlur={() => onTypingChange(false)}
+        )}
+        {boss && (
+          <div className="mx-auto mt-2 w-72">
+            <StatBar
+              pct={boss.hp / boss.maxHp}
+              color="#a855f7"
+              label="BOSS"
+              value={`${boss.hp}/${boss.maxHp}`}
             />
-            <button
-              type="submit"
-              className="ck-btn px-2 py-1 text-xs"
-              disabled={raidCode.trim().length < 4}
-            >
-              Join Raid
-            </button>
-          </form>
+          </div>
         )}
       </div>
 
-      {/* top-right: leave */}
-      <button
-        className="ck-btn absolute right-4 top-4 px-3 py-1.5 text-sm"
-        onClick={onLeave}
-      >
-        ← Leave
-      </button>
+      {/* bottom-right: vitals */}
+      <div className="absolute bottom-4 right-4 w-72">
+        <div className="mb-1 text-right text-sm leading-tight">
+          <div>Lv : {stats?.level ?? "-"}</div>
+          <div>
+            Gold : <span className="text-gold">{stats?.gold ?? 0}g</span>
+          </div>
+          <button
+            className="mt-0.5 rounded border border-ink bg-panel px-2 py-0.5 text-xs hover:bg-black/5"
+            onClick={onPotion}
+          >
+            🧪 {stats?.potions ?? 0} (H)
+          </button>
+        </div>
+        <div className="space-y-1.5">
+          <StatBar
+            pct={expPct}
+            color="#22d3ee"
+            label="Exp:"
+            value={
+              stats && stats.expToNext > 0
+                ? `${stats.exp}/${stats.expToNext}`
+                : "MAX"
+            }
+          />
+          <StatBar
+            pct={hpPct}
+            color="#4ade80"
+            label="Health:"
+            value={`${stats?.hp ?? 0}/${stats?.maxHp ?? 0}`}
+          />
+        </div>
+      </div>
 
-      {/* event toasts */}
+      {/* event toasts (bottom-center) */}
       <div className="pointer-events-none absolute bottom-4 left-1/2 flex w-80 -translate-x-1/2 flex-col items-center gap-1">
         {events.slice(-4).map((e) => (
           <div
             key={e.id}
-            className={`rounded-md px-3 py-1 text-sm font-medium shadow-lg ${
+            className={`rounded-md border border-ink px-3 py-1 text-sm shadow ${
               e.tone === "good"
-                ? "bg-knight-accent/90 text-knight-bg"
+                ? "bg-hp/80 text-ink"
                 : e.tone === "bad"
-                ? "bg-knight-danger/90 text-white"
-                : "bg-knight-panel2/95 text-gray-100"
+                ? "bg-danger/90 text-paper"
+                : "bg-panel text-ink"
             }`}
           >
             {e.text}
@@ -146,23 +107,29 @@ export default function Hud({
   );
 }
 
-function Meter({
+function StatBar({
   pct,
   color,
   label,
+  value,
 }: {
   pct: number;
   color: string;
   label: string;
+  value: string;
 }) {
   return (
-    <div className="relative h-4 w-full overflow-hidden rounded bg-black/50">
+    <div className="relative h-7 w-full overflow-hidden rounded border border-ink bg-panel">
       <div
-        className={`h-full ${color} transition-all duration-150`}
-        style={{ width: `${Math.max(0, Math.min(1, pct)) * 100}%` }}
+        className="h-full"
+        style={{
+          width: `${Math.max(0, Math.min(1, pct)) * 100}%`,
+          background: color,
+        }}
       />
-      <span className="absolute inset-0 flex items-center justify-center text-[10px] font-semibold text-white/90">
-        {label}
+      <span className="absolute inset-0 flex items-center justify-between px-3 text-sm text-ink">
+        <span>{label}</span>
+        <span>{value}</span>
       </span>
     </div>
   );

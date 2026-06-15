@@ -43,6 +43,7 @@ class ShopItem(BaseModel):
     crit_bonus: float = 0.0
     requires_raid: int = 0
     description: str = ""
+    passive: str = ""
 
 
 class BuyIn(BaseModel):

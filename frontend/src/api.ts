@@ -1,10 +1,16 @@
 import type { LeaderboardEntry, Player, ShopItem } from "./types";
 
+// Base URL for the backend. Leave VITE_API_URL empty to talk to the same origin
+// the page is served from (e.g. behind the Vite proxy / a single tunnel); set it
+// to an absolute URL to point at a separately-hosted backend.
 export const API_URL =
   (import.meta.env.VITE_API_URL as string | undefined) ?? "http://localhost:8000";
 
-export const WS_URL =
-  API_URL.replace(/^http/, "ws") + "/ws";
+export const WS_URL = API_URL
+  ? API_URL.replace(/^http/, "ws") + "/ws"
+  : `${window.location.protocol === "https:" ? "wss" : "ws"}://${
+      window.location.host
+    }/ws`;
 
 async function request<T>(
   path: string,

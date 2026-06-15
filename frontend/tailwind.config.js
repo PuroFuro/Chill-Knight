@@ -4,18 +4,25 @@ export default {
   theme: {
     extend: {
       colors: {
-        knight: {
-          bg: "#0f1117",
-          panel: "#1a1d27",
-          panel2: "#232735",
-          accent: "#6ee7b7",
-          accent2: "#38bdf8",
-          gold: "#fbbf24",
-          danger: "#f87171",
-        },
+        // Light, hand-drawn "doodle" palette (see reference-design/).
+        paper: "#f3f3f4", // page background
+        panel: "#ffffff", // cards / pop-outs
+        ink: "#111111", // primary text + line art
+        line: "#222222", // borders / strokes
+        muted: "#6b7280", // secondary text
+        // Status colors — chosen to read clearly on the white background.
+        hp: "#4ade80", // health bar (green)
+        exp: "#22d3ee", // exp bar (cyan)
+        gold: "#d97706", // gold amount (amber)
+        danger: "#dc2626",
+        fire: "#f97316", // roundhead fireball tint
       },
       fontFamily: {
-        mono: ["ui-monospace", "SFMono-Regular", "Menlo", "monospace"],
+        // Title wordmark: KyivType Serif (loaded in index.html).
+        display: ['"KyivType Serif"', "Georgia", "serif"],
+        // Everything else: a clean typewriter mono.
+        mono: ['"Cutive Mono"', "ui-monospace", "SFMono-Regular", "monospace"],
+        sans: ['"Cutive Mono"', "ui-monospace", "monospace"],
       },
     },
   },

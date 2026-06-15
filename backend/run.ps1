@@ -16,5 +16,11 @@ if (-not (Test-Path ".env")) {
     Write-Host "Created backend/.env from template (SQLite by default)." -ForegroundColor Yellow
 }
 
+# If DATABASE_URL points at PostgreSQL/Supabase (asyncpg), install that driver too.
+if ((Get-Content ".env" -Raw) -match "asyncpg") {
+    Write-Host "PostgreSQL/Supabase database detected - installing asyncpg..." -ForegroundColor Cyan
+    & ".venv\Scripts\python.exe" -m pip install -r requirements-postgres.txt
+}
+
 Write-Host "Starting Chill Knight backend on http://localhost:8000 ..." -ForegroundColor Green
 & ".venv\Scripts\python.exe" -m uvicorn app.main:app --reload --port 8000

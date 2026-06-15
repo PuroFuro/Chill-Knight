@@ -19,6 +19,7 @@ async def catalog():
             key=key, name=w["name"], kind="weapon", price=w["price"],
             attack=w["attack"], crit_bonus=w["crit_bonus"],
             requires_raid=w["requires_raid"], description=w["description"],
+            passive=C.passive_text(key),
         ))
     items.append(ShopItem(
         key=C.POTION_KEY, name=C.POTION["name"], kind="potion",

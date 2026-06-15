@@ -8,6 +8,9 @@ class Settings(BaseSettings):
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
+    # Defaults to a local SQLite file for zero-setup dev. Point this at your
+    # Supabase Postgres connection string to persist accounts in Supabase, e.g.
+    #   postgresql+asyncpg://postgres:<PASSWORD>@db.<REF>.supabase.co:5432/postgres
     database_url: str = "sqlite+aiosqlite:///./chill_knight.db"
     secret_key: str = "change-me-in-production-please-use-a-long-random-string"
     cors_origins: str = "http://localhost:5173,http://127.0.0.1:5173"

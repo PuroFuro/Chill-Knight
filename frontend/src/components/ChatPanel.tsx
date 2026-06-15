@@ -3,44 +3,44 @@ import { useEffect, useRef, useState } from "react";
 export interface ChatLine {
   id: number;
   from: string;
-  level: number;
+  level: number; // the world (difficulty) the speaker is in
   text: string;
   mine: boolean;
 }
 
+const IDLE_FADE_MS = 6000; // feed fades out this long after the last message
+
+/**
+ * Bottom-left chat (see reference-design/Overworld.png): a feed box on top and
+ * a persistent input box below. When no new message arrives for a few seconds
+ * the feed fades away, but the input box stays. Press "T" or click to chat.
+ */
 export default function ChatPanel({
   lines,
-  myDifficulty,
   onSend,
   onTypingChange,
 }: {
   lines: ChatLine[];
-  myDifficulty: number;
   onSend: (text: string) => void;
   onTypingChange: (typing: boolean) => void;
 }) {
   const [text, setText] = useState("");
-  const [onlyMyLevel, setOnlyMyLevel] = useState(false);
   const [hovered, setHovered] = useState(false);
   const [focused, setFocused] = useState(false);
+  const [idle, setIdle] = useState(true);
   const inputRef = useRef<HTMLInputElement>(null);
   const feedRef = useRef<HTMLDivElement>(null);
 
-  // The input box only shows when the panel is hovered or actively typing.
-  const expanded = hovered || focused;
+  // Show the feed while there's recent activity, hovering, or typing.
+  const feedVisible = !idle || hovered || focused;
 
   // "T" (or Enter) opens the chat for typing from anywhere in the game.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const ae = document.activeElement;
-      // Don't hijack focus if the user is already typing in any field
-      // (the chat box itself, the raid-code input, etc.).
       const typingElsewhere =
         ae instanceof HTMLInputElement || ae instanceof HTMLTextAreaElement;
-      if (
-        (e.key === "t" || e.key === "T" || e.key === "Enter") &&
-        !typingElsewhere
-      ) {
+      if ((e.key === "t" || e.key === "T") && !typingElsewhere) {
         e.preventDefault();
         inputRef.current?.focus();
       }
@@ -50,13 +50,17 @@ export default function ChatPanel({
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
+  // Each new message wakes the feed and restarts the idle timer.
+  useEffect(() => {
+    if (lines.length === 0) return;
+    setIdle(false);
+    const t = setTimeout(() => setIdle(true), IDLE_FADE_MS);
+    return () => clearTimeout(t);
+  }, [lines]);
+
   useEffect(() => {
     feedRef.current?.scrollTo(0, feedRef.current.scrollHeight);
-  }, [lines, expanded]);
-
-  const shown = onlyMyLevel
-    ? lines.filter((l) => l.level === myDifficulty)
-    : lines;
+  }, [lines, feedVisible]);
 
   function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -68,64 +72,36 @@ export default function ChatPanel({
 
   return (
     <div
-      className="absolute bottom-4 left-4 flex w-80 flex-col"
+      className="absolute bottom-4 left-4 flex w-80 flex-col gap-2"
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
     >
-      <div className="ck-panel mb-2 flex flex-col overflow-hidden">
-        <div className="flex items-center justify-between border-b border-white/10 px-3 py-1.5">
-          <span className="text-xs font-bold text-knight-accent">CHAT</span>
-          <label className="flex items-center gap-1 text-[11px] text-gray-400">
-            <input
-              type="checkbox"
-              checked={onlyMyLevel}
-              onChange={(e) => setOnlyMyLevel(e.target.checked)}
-              className="accent-knight-accent2"
-            />
-            only my level
-          </label>
-        </div>
-        <div
-          ref={feedRef}
-          className={`overflow-y-auto px-3 py-2 text-sm transition-all ${
-            expanded ? "h-44" : "h-28"
-          }`}
-        >
-          {shown.length === 0 && (
-            <p className="text-xs text-gray-600">
-              No messages yet. Hover or press T to chat.
-            </p>
-          )}
-          {shown.map((l) => (
-            <div key={l.id} className="mb-1 leading-snug">
-              <span className="text-[10px] text-gray-500">[Lv {l.level}]</span>{" "}
-              <span
-                className={`font-semibold ${
-                  l.mine ? "text-knight-accent2" : "text-knight-accent"
-                }`}
-              >
-                {l.from}:
-              </span>{" "}
-              <span className="text-gray-200">{l.text}</span>
-            </div>
-          ))}
-        </div>
-      </div>
-      {/* Input only appears while hovering or typing. It stays in the layout
-          (collapsed, not display:none) so the "T" shortcut can always focus
-          it, which in turn expands the panel. */}
-      <form
-        onSubmit={submit}
-        className={
-          expanded
-            ? "opacity-100 transition-opacity"
-            : "pointer-events-none h-0 overflow-hidden opacity-0"
-        }
+      <div
+        ref={feedRef}
+        className={`ck-chat-fade h-40 overflow-y-auto rounded-md border border-ink bg-black/5 px-3 py-2 text-sm ${
+          feedVisible ? "opacity-100" : "pointer-events-none opacity-0"
+        }`}
       >
+        {lines.length === 0 && (
+          <p className="text-muted">No messages yet. Press T to chat.</p>
+        )}
+        {lines.map((l) => (
+          <div key={l.id} className="mb-1 leading-snug">
+            <span className={l.mine ? "font-bold text-ink" : "font-bold text-danger"}>
+              {l.from}
+            </span>{" "}
+            <span className="text-muted">(World {l.level})</span>
+            <span> : {l.text}</span>
+          </div>
+        ))}
+      </div>
+
+      {/* Input box always persists. */}
+      <form onSubmit={submit} className="flex items-center gap-1">
         <input
           ref={inputRef}
           className="ck-input text-sm"
-          placeholder="Press T to chat…"
+          placeholder="Press 't' or click this box to chat"
           value={text}
           maxLength={160}
           onChange={(e) => setText(e.target.value)}
@@ -138,6 +114,13 @@ export default function ChatPanel({
             onTypingChange(false);
           }}
         />
+        <button
+          type="submit"
+          className="rounded-md border border-ink bg-panel px-3 py-2 text-sm hover:bg-black/5"
+          aria-label="Send"
+        >
+          &gt;
+        </button>
       </form>
     </div>
   );
