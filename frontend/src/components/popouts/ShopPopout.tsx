@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { api } from "../../api";
 import type { Player, ShopItem } from "../../types";
 import PopoutShell from "./PopoutShell";
+import shopkeeperImg from "../../assets/Shopkeeper.png";
 
 // Placeholder shopkeeper personality, one line per item. The real shopkeeper
 // character/art comes later; these stand in for his banter.
@@ -64,13 +65,20 @@ export default function ShopPopout({
 
   return (
     <PopoutShell onClose={onClose} className="w-[680px] max-w-[94vw] p-4">
-      <div className="mb-3 flex items-center justify-between pr-8">
+      <div className="mb-3 flex items-center gap-3 pr-8">
         <h2 className="font-display text-xl font-bold">Shop</h2>
         <span className="text-sm text-gold">{player.gold}g</span>
       </div>
 
-      {/* shopkeeper dialogue */}
-      <div className="mb-3 min-h-[56px] rounded-md border border-ink bg-black/5 p-3 text-sm">
+      {/* shopkeeper dialogue — the shopkeeper himself leans on the top edge of
+          the box. The art is intentionally cropped so only his upper body and
+          outstretched arm show, draped over the box. */}
+      <div className="relative mb-3 min-h-[56px] rounded-md border border-ink bg-black/5 p-3 pr-32 text-sm">
+        <img
+          src={shopkeeperImg}
+          alt="Shopkeeper"
+          className="pointer-events-none absolute right-2 bottom-[calc(100%-0px)] w-3/4 select-none object-contain object-bottom"
+        />
         {dialogue}
       </div>
 
