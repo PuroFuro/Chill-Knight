@@ -73,6 +73,12 @@ class PlayerRT:
     attack_cd: float = 0.0
     attack_active: float = 0.0
     attack_hit_ids: set = field(default_factory=set)
+    # 3-hit combo: combo_index is the *next* swing to perform (0,1,2);
+    # combo_active is the swing currently animating (-1 when idle); combo_window
+    # counts down and resets the chain to the first swing once it elapses.
+    combo_index: int = 0
+    combo_active: int = -1
+    combo_window: float = 0.0
     parry_cd: float = 0.0
     parry_active: float = 0.0
     counter_ready: float = 0.0

@@ -10,6 +10,7 @@ import OverworldMenu from "./components/OverworldMenu";
 import TitleScreen from "./components/TitleScreen";
 import GameCanvas from "./game/GameCanvas";
 import { GameClient } from "./net/socket";
+import * as sfx from "./sound";
 import type { Player, ServerMsg, Snapshot, StatsMsg } from "./types";
 
 type Screen = "title" | "login" | "register" | "about" | "game";
@@ -130,7 +131,9 @@ export default function App() {
               : p
           );
           break;
-        case "chat":
+        case "chat": {
+          const mine = msg.from === player?.nickname;
+          if (!mine) sfx.play("messagePop"); // someone else (any world) spoke
           setChat((c) => [
             ...c.slice(-59),
             {
@@ -138,14 +141,32 @@ export default function App() {
               from: msg.from,
               level: msg.level,
               text: msg.text,
-              mine: msg.from === player?.nickname,
+              mine,
             },
           ]);
           break;
+        }
         case "event":
           if (msg.kind === "reward") {
             if ((msg.gold as number) > 0) pushPopup("gold", msg.gold as number);
             if ((msg.exp as number) > 0) pushPopup("exp", msg.exp as number);
+          }
+          // These events are delivered only to the local player, so their
+          // sounds are correctly local-only.
+          switch (msg.kind) {
+            case "slash":
+              if (msg.counter) sfx.play("parryAttack");
+              else sfx.playSlash((msg.index as number) ?? 0);
+              break;
+            case "parry":
+              sfx.play("parry");
+              break;
+            case "hurt":
+              sfx.play("hit");
+              break;
+            case "levelup":
+              sfx.play("levelUp");
+              break;
           }
           handleGameEvent(msg, pushEvent);
           break;

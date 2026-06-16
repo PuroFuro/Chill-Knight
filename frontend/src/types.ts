@@ -45,6 +45,7 @@ export interface SnapPlayer {
   facing: number;
   dead: boolean;
   atk: boolean;
+  combo: number; // index of the swing currently animating (0-2), -1 idle
   parry: boolean;
   counter: boolean;
   chat: string;
@@ -72,7 +73,7 @@ export interface Snapshot {
   boss: { hp: number; maxHp: number } | null;
   players: SnapPlayer[];
   enemies: SnapEnemy[];
-  projectiles: { id: number; x: number; y: number }[];
+  projectiles: { id: number; x: number; y: number; a: number }[];
 }
 
 export interface StatsMsg {

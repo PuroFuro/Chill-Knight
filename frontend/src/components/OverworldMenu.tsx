@@ -1,12 +1,14 @@
 import { useEffect, useState } from "react";
 import type { Player } from "../types";
+import * as sfx from "../sound";
 import ChangeDifficultyPopout from "./popouts/ChangeDifficultyPopout";
 import HowToPlayPopout from "./popouts/HowToPlayPopout";
 import InventoryPopout from "./popouts/InventoryPopout";
+import PopoutShell from "./popouts/PopoutShell";
 import RaidPopout from "./popouts/RaidPopout";
 import ShopPopout from "./popouts/ShopPopout";
 
-type Panel = "shop" | "inventory" | "raid" | "help" | "difficulty" | null;
+type Panel = "shop" | "inventory" | "raid" | "help" | "difficulty" | "logout" | null;
 
 /**
  * Top-left hamburger menu and the pop-outs it opens (Shop, Inventory, Raid, How
@@ -62,7 +64,7 @@ export default function OverworldMenu({
     { label: "Raid", action: () => open("raid") },
     { label: "How to play", action: () => open("help") },
     { label: "Change Difficulty", action: () => open("difficulty") },
-    { label: "Logout", action: onLogout },
+    { label: "Logout", action: () => open("logout") },
   ];
 
   return (
@@ -94,6 +96,7 @@ export default function OverworldMenu({
                 <button
                   className="block w-full py-0.5 text-left hover:opacity-60"
                   onClick={it.action}
+                  onMouseEnter={() => sfx.play("hover")}
                 >
                   {it.label}
                 </button>
@@ -131,6 +134,34 @@ export default function OverworldMenu({
           }}
           onClose={() => setPanel(null)}
         />
+      )}
+      {panel === "logout" && (
+        <PopoutShell onClose={() => setPanel(null)} className="w-[360px] max-w-[94vw] p-5">
+          <h2 className="mb-2 pr-8 font-display text-xl font-bold">Log out?</h2>
+          <p className="mb-5 text-sm text-muted">
+            Are you sure you want to log out? You'll return to the title screen.
+          </p>
+          <div className="flex justify-end gap-2">
+            <button
+              className="ck-btn px-4 py-2 text-sm"
+              onClick={() => setPanel(null)}
+              onMouseEnter={() => sfx.play("hover")}
+            >
+              Cancel
+            </button>
+            <button
+              className="ck-btn-primary px-4 py-2 text-sm"
+              onClick={() => {
+                sfx.play("exit");
+                setPanel(null);
+                onLogout();
+              }}
+              onMouseEnter={() => sfx.play("hover")}
+            >
+              Log out
+            </button>
+          </div>
+        </PopoutShell>
       )}
       {panel === "help" && <HowToPlayPopout onClose={() => setPanel(null)} />}
       {panel === "difficulty" && (

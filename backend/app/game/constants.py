@@ -20,6 +20,20 @@ ATTACK_RANGE = 70.0
 ATTACK_ARC = 1.4  # radians, half-angle of the slash cone
 ATTACK_COOLDOWN = 0.45
 ATTACK_ACTIVE = 0.15  # how long the slash hitbox is live
+
+# --- 3-hit combo ----------------------------------------------------------
+# The knight swings a fixed three-step combo: down->up, up->down, then a
+# forward thrust. Each of the first two steps is followed by COMBO_INTERVAL
+# before the next swing can land; after the thrust the chain rests for
+# COMBO_FINISH_INTERVAL before looping back to the first swing. If the player
+# stops attacking for COMBO_GRACE the chain resets to the first swing.
+COMBO_INTERVAL = 0.4
+COMBO_FINISH_INTERVAL = 0.8
+COMBO_GRACE = 1.0
+COMBO_LEN = 3
+# The thrust (3rd swing) lunges a bit further with a tighter cone.
+THRUST_RANGE_BONUS = 26.0
+THRUST_ARC = 0.7
 PARRY_DURATION = 0.30  # parry window
 PARRY_COOLDOWN = 1.10
 PARRY_BONUS = 2.0  # extra damage multiplier on the counter-attack

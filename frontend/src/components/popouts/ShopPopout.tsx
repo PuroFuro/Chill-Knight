@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { api } from "../../api";
 import type { Player, ShopItem } from "../../types";
+import * as sfx from "../../sound";
 import PopoutShell from "./PopoutShell";
 import shopkeeperImg from "../../assets/Shopkeeper.png";
 
@@ -42,6 +43,7 @@ export default function ShopPopout({
   const [items, setItems] = useState<ShopItem[]>([]);
   const [selected, setSelected] = useState<string | null>(null);
   const [msg, setMsg] = useState("");
+  const [typed, setTyped] = useState("");
 
   useEffect(() => {
     api.shop().then(setItems).catch(() => setMsg("Could not load shop"));
@@ -53,10 +55,31 @@ export default function ShopPopout({
     ? SHOPKEEPER[item.key] ?? `Ah, the ${item.name}? ${item.description}`
     : "Welcome, knight! Click an item and I'll tell you about it.";
 
-  async function act(fn: Promise<Player>, ok: string) {
+  // Type the shopkeeper's line out one character at a time, humming the
+  // "speaking" sound while he talks and falling silent when the line finishes.
+  useEffect(() => {
+    setTyped("");
+    let i = 0;
+    sfx.startSpeaking();
+    const id = window.setInterval(() => {
+      i++;
+      setTyped(dialogue.slice(0, i));
+      if (i >= dialogue.length) {
+        window.clearInterval(id);
+        sfx.stopSpeaking();
+      }
+    }, 28);
+    return () => {
+      window.clearInterval(id);
+      sfx.stopSpeaking();
+    };
+  }, [dialogue]);
+
+  async function act(fn: Promise<Player>, ok: string, sound: sfx.SoundName) {
     setMsg("");
     try {
       onPlayer(await fn);
+      sfx.play(sound);
       setMsg(ok);
     } catch (e) {
       setMsg(e instanceof Error ? e.message : "Failed");
@@ -64,7 +87,7 @@ export default function ShopPopout({
   }
 
   return (
-    <PopoutShell onClose={onClose} className="w-[680px] max-w-[94vw] p-4">
+    <PopoutShell onClose={onClose} className="w-[720px] max-w-[94vw] translate-y-24 p-4">
       <div className="mb-3 flex items-center gap-3 pr-8">
         <h2 className="font-display text-xl font-bold">Shop</h2>
         <span className="text-sm text-gold">{player.gold}g</span>
@@ -72,23 +95,29 @@ export default function ShopPopout({
 
       {/* shopkeeper dialogue — the shopkeeper himself leans on the top edge of
           the box. The art is intentionally cropped so only his upper body and
-          outstretched arm show, draped over the box. */}
-      <div className="relative mb-3 min-h-[56px] rounded-md border border-ink bg-black/5 p-3 pr-32 text-sm">
+          outstretched arm show, draped over the box. The image hangs above the
+          box, so the scroll/clip lives on an inner div (clipping the outer
+          wrapper would hide him). */}
+      <div className="relative mb-3">
         <img
           src={shopkeeperImg}
           alt="Shopkeeper"
-          className="pointer-events-none absolute right-2 bottom-[calc(100%-0px)] w-3/4 select-none object-contain object-bottom"
+          className="pointer-events-none absolute right-2 bottom-[calc(100%+0px)] z-10 w-3/4 select-none object-contain object-bottom"
         />
-        {dialogue}
+        <div className="h-[72px] overflow-y-auto rounded-md border border-ink bg-black/5 p-3 pr-32 text-sm">
+          {typed}
+        </div>
       </div>
 
-      <div className="flex gap-4">
+      {/* Fixed-height row so selecting different items never resizes the box. */}
+      <div className="flex h-[300px] gap-4">
         {/* item list */}
-        <div className="max-h-[46vh] w-1/2 space-y-1 overflow-y-auto pr-1">
+        <div className="w-1/2 space-y-1 overflow-y-auto pr-1">
           {items.map((it) => (
             <button
               key={it.key}
               onClick={() => setSelected(it.key)}
+              onMouseEnter={() => sfx.play("hover")}
               className={`flex w-full items-center justify-between rounded border px-3 py-1.5 text-sm ${
                 selected === it.key
                   ? "border-ink bg-black/10"
@@ -102,13 +131,21 @@ export default function ShopPopout({
         </div>
 
         {/* detail */}
-        <div className="w-1/2 rounded-md border border-ink p-3">
+        <div className="w-1/2 overflow-y-auto rounded-md border border-ink p-3">
           {item ? (
             <ItemDetail
               item={item}
               player={player}
-              onBuy={() => act(api.buy(item.key, token), `Bought ${item.name}`)}
-              onEquip={() => act(api.equip(item.key, token), `Equipped ${item.name}`)}
+              onBuy={() =>
+                act(
+                  api.buy(item.key, token),
+                  `Bought ${item.name}`,
+                  item.kind === "potion" ? "buyPotion" : "buyWeapon"
+                )
+              }
+              onEquip={() =>
+                act(api.equip(item.key, token), `Equipped ${item.name}`, "equip")
+              }
             />
           ) : (
             <p className="text-sm text-muted">Select an item to see its details.</p>
@@ -163,7 +200,11 @@ function ItemDetail({
         {equipped ? (
           <span className="rounded border border-ink px-2 py-1 text-xs">Equipped</span>
         ) : owned ? (
-          <button className="ck-btn px-3 py-1 text-xs" onClick={onEquip}>
+          <button
+            className="ck-btn px-3 py-1 text-xs"
+            onClick={onEquip}
+            onMouseEnter={() => sfx.play("hover")}
+          >
             Equip
           </button>
         ) : (
@@ -171,6 +212,7 @@ function ItemDetail({
             className="ck-btn-primary px-3 py-1 text-xs"
             disabled={locked || player.gold < item.price}
             onClick={onBuy}
+            onMouseEnter={() => sfx.play("hover")}
           >
             {locked ? "Locked" : "Buy"}
           </button>

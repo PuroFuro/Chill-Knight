@@ -20,9 +20,10 @@ export default {
       fontFamily: {
         // Title wordmark: KyivType Serif (loaded in index.html).
         display: ['"KyivType Serif"', "Georgia", "serif"],
-        // Everything else: a clean typewriter mono.
+        // Primary game font: KyivType Serif, falling back to the mono.
+        sans: ['"KyivType Serif"', '"Cutive Mono"', "ui-monospace", "serif"],
+        // Kept available for anything that still wants a typewriter mono.
         mono: ['"Cutive Mono"', "ui-monospace", "SFMono-Regular", "monospace"],
-        sans: ['"Cutive Mono"', "ui-monospace", "monospace"],
       },
     },
   },

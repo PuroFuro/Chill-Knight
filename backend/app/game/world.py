@@ -131,6 +131,14 @@ class World:
                       "counter_ready", "invuln", "chat_ttl"):
                 setattr(rt, t, max(0.0, getattr(rt, t) - dt))
 
+            # The combo chain resets to the first swing if the player pauses.
+            if rt.combo_window > 0:
+                rt.combo_window = max(0.0, rt.combo_window - dt)
+                if rt.combo_window == 0:
+                    rt.combo_index = 0
+            if rt.attack_active <= 0:
+                rt.combo_active = -1
+
             if rt.dead:
                 if self.mode == "overworld":
                     rt.respawn_in -= dt
@@ -155,26 +163,43 @@ class World:
                 rt.parry_active = C.PARRY_DURATION
                 rt.parry_cd = C.PARRY_COOLDOWN
 
-            # start a slash (cooldown shortened by the "swift" weapon passive)
+            # start the next swing of the 3-hit combo (down-up, up-down, thrust).
+            # Cooldown between swings is short (COMBO_INTERVAL); the chain rests
+            # longer after the finishing thrust. The "swift" passive speeds both.
             if rt.in_attack and rt.attack_cd <= 0 and rt.attack_active <= 0:
+                idx = rt.combo_index
                 rt.attack_active = C.ATTACK_ACTIVE
-                rt.attack_cd = C.ATTACK_COOLDOWN * C.weapon_passive(rt.profile.weapon)["cd_mult"]
                 rt.attack_hit_ids = set()
+                rt.combo_active = idx
+                rt.combo_window = C.COMBO_GRACE
+                cd_mult = C.weapon_passive(rt.profile.weapon)["cd_mult"]
+                counter = rt.counter_ready > 0
+                rt.push_event("slash", index=idx, counter=counter)
+                if idx >= C.COMBO_LEN - 1:
+                    rt.attack_cd = C.COMBO_FINISH_INTERVAL * cd_mult
+                    rt.combo_index = 0
+                else:
+                    rt.attack_cd = C.COMBO_INTERVAL * cd_mult
+                    rt.combo_index = idx + 1
 
             if rt.attack_active > 0:
                 self._resolve_slash(rt)
 
     def _resolve_slash(self, rt: PlayerRT) -> None:
+        # The finishing thrust reaches a little further but through a tighter cone.
+        is_thrust = rt.combo_active >= C.COMBO_LEN - 1
+        reach = C.ATTACK_RANGE + (C.THRUST_RANGE_BONUS if is_thrust else 0.0)
+        arc = C.THRUST_ARC if is_thrust else C.ATTACK_ARC
         targets = list(self.enemies)
         for e in targets:
             if e.id in rt.attack_hit_ids:
                 continue
             d = dist(rt.x, rt.y, e.x, e.y)
-            if d > C.ATTACK_RANGE + e.radius:
+            if d > reach + e.radius:
                 continue
             ang = math.atan2(e.y - rt.y, e.x - rt.x)
             diff = abs((ang - rt.facing + math.pi) % (2 * math.pi) - math.pi)
-            if diff > C.ATTACK_ARC:
+            if diff > arc:
                 continue
             rt.attack_hit_ids.add(e.id)
             dmg = float(rt.profile.attack)
@@ -370,6 +395,7 @@ class World:
             rt.push_event("parry")
             return
         rt.hp -= dmg
+        rt.push_event("hurt", dmg=int(dmg))
         if rt.hp <= 0:
             self._kill_player(rt)
 
@@ -473,6 +499,7 @@ class World:
                     "facing": round(rt.facing, 3),
                     "dead": rt.dead,
                     "atk": rt.attack_active > 0,
+                    "combo": rt.combo_active,
                     "parry": rt.parry_active > 0,
                     "counter": rt.counter_ready > 0,
                     "chat": rt.chat_text if rt.chat_ttl > 0 else "",
@@ -490,7 +517,10 @@ class World:
                 for e in self.enemies
             ],
             "projectiles": [
-                {"id": p.id, "x": round(p.x, 1), "y": round(p.y, 1)}
+                {
+                    "id": p.id, "x": round(p.x, 1), "y": round(p.y, 1),
+                    "a": round(math.atan2(p.vy, p.vx), 3),
+                }
                 for p in self.projectiles
             ],
         }

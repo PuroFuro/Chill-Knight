@@ -12,7 +12,10 @@
       "Bash(npm run *)",
       "Bash(./.venv/Scripts/python.exe -c ' *)",
       "Bash(git check-ignore *)",
-      "Bash(npx tsc *)"
+      "Bash(npx tsc *)",
+      "Bash(python -c \"import ast; [ast.parse\\(open\\(f\\).read\\(\\)\\) for f in ['app/game/world.py','app/game/entities.py','app/game/constants.py']]; print\\('OK: backend syntax valid'\\)\")",
+      "Bash(npx vite *)",
+      "Bash(python -c ' *)"
     ]
   }
 }

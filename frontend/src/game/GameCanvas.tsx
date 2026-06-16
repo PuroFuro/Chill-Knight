@@ -7,6 +7,10 @@ import grassUrl from "../assets/Grass.png";
 import rockUrl from "../assets/Rock.png";
 import rockSmallUrl from "../assets/Rock_Small.png";
 import roundheadUrl from "../assets/Roundhead_Normal.png";
+import knightUrl from "../assets/Knight/Knight_Normal.png";
+import knightHandUrl from "../assets/Knight/Knight_Hand.png";
+import knightLegUrl from "../assets/Knight/Knight_Leg.png";
+import swordUrl from "../assets/Weapon/Rusty Sword.png";
 import type { GameClient } from "../net/socket";
 import type { Snapshot } from "../types";
 
@@ -47,6 +51,24 @@ const BONE_REST = -1.2; // raised position as the windup begins
 const BONE_WIND = -1.75; // small extra pull-back during the windup (anticipation)
 const BONE_STRIKE = 1.05; // swung down/through toward the target on the strike
 
+// ---- knight (player) animation -----------------------------------------
+const KNIGHT_H = 56; // on-screen knight height in px
+const COMBO_ANIM_MS = 280; // how long one combo swing visibly animates
+const WALK_CYCLE = 9; // leg-swing speed (radians/second of walk phase)
+
+// Per-player knight animation state: a walk phase that advances while moving,
+// the previous render position (to detect movement), and the currently
+// animating combo swing (lastCombo tracks the snapshot's `combo` to catch the
+// rising edge of each new swing).
+interface KnightAnim {
+  walk: number;
+  px: number;
+  py: number;
+  lastCombo: number;
+  animCombo: number; // -1 idle, else 0..2
+  animStart: number;
+}
+
 // Motion smoothing: render positions ease toward the latest snapshot so the
 // 20Hz server updates look smooth at 60fps. SNAP_DIST teleports (no slide) on
 // big jumps like respawn or changing worlds.
@@ -68,8 +90,9 @@ function mulberry32(seed: number) {
 function genDecor(): Decor[] {
   const rng = mulberry32(0xc4117);
   const out: Decor[] = [];
-  // Sparse scatter — just enough to give the field texture without clutter.
-  for (let i = 0; i < 45; i++) {
+  // Very sparse scatter — just a touch of texture, kept low so the field reads
+  // clean rather than noisy.
+  for (let i = 0; i < 20; i++) {
     out.push({
       kind: "grass",
       x: rng() * ARENA.w,
@@ -77,7 +100,7 @@ function genDecor(): Decor[] {
       size: 20 + rng() * 16,
     });
   }
-  for (let i = 0; i < 6; i++) {
+  for (let i = 0; i < 3; i++) {
     out.push({
       kind: "rock",
       x: rng() * ARENA.w,
@@ -85,7 +108,7 @@ function genDecor(): Decor[] {
       size: 28 + rng() * 22,
     });
   }
-  for (let i = 0; i < 9; i++) {
+  for (let i = 0; i < 5; i++) {
     out.push({
       kind: "rockSmall",
       x: rng() * ARENA.w,
@@ -128,10 +151,16 @@ export default function GameCanvas({
       grass: mk(grassUrl),
       rock: mk(rockUrl),
       rockSmall: mk(rockSmallUrl),
+      knight: mk(knightUrl),
+      hand: mk(knightHandUrl),
+      leg: mk(knightLegUrl),
+      sword: mk(swordUrl),
     };
   }
   // Per-enemy attack animation state, driven by the snapshot `wind` flag.
   const enemyAnim = useRef<Map<number, EnemyAnim>>(new Map());
+  // Per-player knight walk/combo animation state.
+  const knightAnim = useRef<Map<number, KnightAnim>>(new Map());
   // Smoothed render positions keyed by "p<id>" / "e<id>" for interpolation.
   const renderState = useRef<Map<string, { x: number; y: number; facing: number }>>(
     new Map()
@@ -297,7 +326,7 @@ export default function GameCanvas({
 
       if (!snap) {
         ctx.fillStyle = "#6b7280";
-        ctx.font = "16px 'Cutive Mono', monospace";
+        ctx.font = "16px 'KyivType Serif', serif";
         ctx.textAlign = "center";
         ctx.fillText("Loading world…", W / 2, H / 2);
         raf = requestAnimationFrame(draw);
@@ -369,7 +398,7 @@ export default function GameCanvas({
           bar(ctx, ex - size * 0.4, ey - size * 0.55, size * 0.8, 4, e.hp / e.maxHp, "#dc2626");
           if (isBoss) {
             ctx.fillStyle = "#111";
-            ctx.font = "bold 12px 'Cutive Mono', monospace";
+            ctx.font = "bold 12px 'KyivType Serif', serif";
             ctx.textAlign = "center";
             ctx.fillText("BOSS", ex, ey - size * 0.6);
           }
@@ -381,12 +410,13 @@ export default function GameCanvas({
           if (!liveIds.has(id)) enemyAnim.current.delete(id);
       }
 
-      // projectiles (roundhead fireballs)
+      // projectiles (roundhead fireballs) — the sprite faces right by default,
+      // so rotating by the travel angle `a` makes it point where it's flying.
       for (const pr of snap.projectiles) {
         const px = sx(pr.x);
         const py = sy(pr.y);
         if (sp.fireball.complete && sp.fireball.naturalWidth > 0) {
-          drawSprite(ctx, sp.fireball, px, py, 26);
+          drawRotatedSprite(ctx, sp.fireball, px, py, pr.a, 26);
         } else {
           ctx.fillStyle = "#f97316";
           ctx.beginPath();
@@ -395,29 +425,59 @@ export default function GameCanvas({
         }
       }
 
-      // players (local knight + allies, drawn as simple knight doodles)
+      // players (local knight + allies), drawn from the layered Knight sprite.
+      const livePlayerIds = new Set<number>();
       for (const p of snap.players) {
+        livePlayerIds.add(p.id);
         const sm = renderState.current.get("p" + p.id)!;
         const px = sx(sm.x);
         const py = sy(sm.y);
         const isMe = p.id === playerId;
+
+        // advance this knight's walk + combo animation state
+        let ka = knightAnim.current.get(p.id);
+        if (!ka) {
+          ka = { walk: 0, px: sm.x, py: sm.y, lastCombo: -1, animCombo: -1, animStart: now };
+          knightAnim.current.set(p.id, ka);
+        }
+        const moved = Math.hypot(sm.x - ka.px, sm.y - ka.py);
+        ka.px = sm.x;
+        ka.py = sm.y;
+        const moving = moved > 0.4; // ~>24px/s at 60fps
+        if (moving) ka.walk += dt * WALK_CYCLE;
+        // catch the rising edge of each new combo swing (index changes per swing)
+        if (p.combo >= 0 && p.combo !== ka.lastCombo) {
+          ka.animCombo = p.combo;
+          ka.animStart = now;
+        }
+        ka.lastCombo = p.combo;
+        const comboT = ka.animCombo >= 0 ? (now - ka.animStart) / COMBO_ANIM_MS : 1;
+        const swing = comboT < 1 ? ka.animCombo : -1;
+
         if (p.dead) {
           ctx.fillStyle = "#6b7280";
-          ctx.font = "20px 'Cutive Mono', monospace";
+          ctx.font = "20px 'KyivType Serif', serif";
           ctx.textAlign = "center";
           ctx.fillText("💀", px, py + 6);
         } else {
-          drawKnight(ctx, px, py, sm.facing, isMe, p.atk, p.parry, p.counter);
+          drawKnight(ctx, sp, px, py, sm.facing, isMe, {
+            moving,
+            walk: ka.walk,
+            swing,
+            swingT: clamp01(comboT),
+            parry: p.parry,
+            counter: p.counter,
+          });
         }
         // name + level + hp
         ctx.fillStyle = "#111";
-        ctx.font = "bold 12px 'Cutive Mono', monospace";
+        ctx.font = "bold 12px 'KyivType Serif', serif";
         ctx.textAlign = "center";
         ctx.fillText(`${p.name} · L${p.lvl}`, px, py - 30);
         bar(ctx, px - 22, py - 26, 44, 5, p.hp / p.maxHp, "#4ade80");
         // chat bubble
         if (p.chat) {
-          ctx.font = "12px 'Cutive Mono', monospace";
+          ctx.font = "12px 'KyivType Serif', serif";
           const w = Math.min(220, ctx.measureText(p.chat).width + 18);
           ctx.fillStyle = "#ffffff";
           ctx.strokeStyle = "#111";
@@ -428,6 +488,11 @@ export default function GameCanvas({
           ctx.fillStyle = "#111";
           ctx.fillText(p.chat, px, py - 47);
         }
+      }
+      // forget walk/combo state for players who left this world
+      if (knightAnim.current.size > livePlayerIds.size) {
+        for (const id of knightAnim.current.keys())
+          if (!livePlayerIds.has(id)) knightAnim.current.delete(id);
       }
 
       // gold/exp pickups: drop at the kill site, then pull to the player.
@@ -515,6 +580,7 @@ const clamp01 = (t: number) => Math.max(0, Math.min(1, t));
 const lerp = (a: number, b: number, t: number) => a + (b - a) * t;
 const easeInOut = (t: number) =>
   t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2;
+const easeOut = (t: number) => 1 - Math.pow(1 - t, 3);
 // Overshoots then settles — gives the strike a snappy, elastic feel.
 function easeOutElastic(t: number): number {
   if (t <= 0) return 0;
@@ -567,74 +633,111 @@ function shadow(ctx: CanvasRenderingContext2D, x: number, y: number, r: number) 
   ctx.fill();
 }
 
-// A simple hand-drawn knight: round body + little sword. Placeholder art.
+interface KnightDraw {
+  moving: boolean;
+  walk: number; // accumulated walk phase
+  swing: number; // -1 idle, else combo index 0..2 currently animating
+  swingT: number; // 0..1 progress through the current swing
+  parry: boolean;
+  counter: boolean;
+}
+
+// Draw the knight from layered sprites: the body (with a little walk bob +
+// stepping legs), and — while attacking — a hand-held sword swung through the
+// 3-hit combo (down→up, up→down, forward thrust). `facing` only decides which
+// way the knight looks (left/right); the swing happens on the facing side.
 function drawKnight(
   ctx: CanvasRenderingContext2D,
+  sp: Record<string, HTMLImageElement>,
   x: number,
   y: number,
   facing: number,
   isMe: boolean,
-  atk: boolean,
-  parry: boolean,
-  counter: boolean
+  o: KnightDraw
 ) {
-  const R = 16;
-  shadow(ctx, x, y + R * 0.95, R * 0.95);
+  const flip = Math.cos(facing) < 0; // facing left
+  const dir = flip ? -1 : 1; // forward x-direction on screen
+  const H = KNIGHT_H;
 
-  // sword (drawn behind the body so the body overlaps the grip)
-  const tipX = x + Math.cos(facing) * (R + 18);
-  const tipY = y + Math.sin(facing) * (R + 18);
-  ctx.strokeStyle = "#111";
-  ctx.lineWidth = 3;
-  ctx.lineCap = "round";
-  ctx.beginPath();
-  ctx.moveTo(x, y);
-  ctx.lineTo(tipX, tipY);
-  ctx.stroke();
-  // crossguard
-  const gx = x + Math.cos(facing) * R;
-  const gy = y + Math.sin(facing) * R;
-  ctx.lineWidth = 2;
-  ctx.beginPath();
-  ctx.moveTo(gx - Math.sin(facing) * 5, gy + Math.cos(facing) * 5);
-  ctx.lineTo(gx + Math.sin(facing) * 5, gy - Math.cos(facing) * 5);
-  ctx.stroke();
+  // walk: gentle vertical bob + alternating leg swing while moving
+  const step = o.moving ? Math.sin(o.walk) : 0;
+  const bob = o.moving ? Math.abs(Math.sin(o.walk)) * 3 : 0;
+  const by = y - bob;
 
-  // body
-  if (counter) {
+  shadow(ctx, x, y + H * 0.52, H * 0.34);
+
+  // legs (behind the body): two stubby legs poking out below the body so they
+  // read clearly, stepping opposite each other while walking.
+  const legY = by + H * 0.47;
+  const legDX = H * 0.08;
+  const legSize = H * 0.25;
+  drawSprite(ctx, sp.leg, x - legDX, legY + step * 3, legSize);
+  drawSprite(ctx, sp.leg, x + legDX, legY - step * 3, legSize);
+
+  if (o.counter) {
     ctx.shadowColor = "#22c55e";
     ctx.shadowBlur = 16;
   }
-  ctx.fillStyle = isMe ? "#ffffff" : "#e5e7eb";
-  ctx.strokeStyle = "#111";
-  ctx.lineWidth = 2;
-  ctx.beginPath();
-  ctx.arc(x, y, R, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.stroke();
+  // body (tint allies slightly so the local knight reads as "me")
+  if (!isMe) ctx.globalAlpha = 0.85;
+  drawSprite(ctx, sp.knight, x, by, H, flip);
+  ctx.globalAlpha = 1;
   ctx.shadowBlur = 0;
-  // a little visor slit
-  ctx.strokeStyle = "#111";
-  ctx.lineWidth = 2;
-  ctx.beginPath();
-  ctx.moveTo(x - 6, y - 2);
-  ctx.lineTo(x + 6, y - 2);
-  ctx.stroke();
 
-  // slash arc
-  if (atk) {
-    ctx.strokeStyle = "rgba(17,17,17,0.5)";
-    ctx.lineWidth = 5;
+  // sword arm during an attack swing. The pivot sits at the knight's shoulder
+  // (out to the facing side and below the head), and the swings stay fairly
+  // level so the hand never rides up over the helmet.
+  if (o.swing >= 0) {
+    const pivotX = x + dir * H * 0.2;
+    const pivotY = by + H * 0.1;
+    const arm = H * 1.58; // reach: larger = sword swings further from the body
+
+    let theta: number; // screen-space angle of the sword from the pivot
+    let lunge = 0;
+    // SWING_HI/LO bound the sweep; wider gap = more dramatic arc.
+    if (o.swing === 0) {
+      // down → up
+      theta = lerp(1.15, -1.0, easeOut(o.swingT));
+    } else if (o.swing === 1) {
+      // up → down
+      theta = lerp(-1.0, 1.15, easeOut(o.swingT));
+    } else {
+      // forward thrust — sword stays level, the arm lunges out and back
+      theta = -0.05;
+      lunge = Math.sin(o.swingT * Math.PI) * H * 0.5;
+    }
+    // mirror the vertical-axis swing when facing left
+    const screenTheta = flip ? Math.PI - theta : theta;
+    const cos = Math.cos(screenTheta);
+    const sin = Math.sin(screenTheta);
+    // the gripping hand sits at the shoulder (this radius is the arm reach)
+    const handR = arm * 0.3 + lunge;
+    const hx = pivotX + cos * handR;
+    const hy = pivotY + sin * handR;
+    // the sword is held IN the hand: offset its centre just past the hand so the
+    // grip lands on the hand and the blade extends away from it.
+    const swordSize = H * 1.15;
+    const cx = hx + cos * (swordSize * 0.38);
+    const cy = hy + sin * (swordSize * 0.38);
+
+    // a faint slash arc that hugs the blade (not way out past it)
+    ctx.strokeStyle = "rgba(17,17,17,0.35)";
+    ctx.lineWidth = 4;
     ctx.beginPath();
-    ctx.arc(x, y, R + 22, facing - 0.9, facing + 0.9);
+    ctx.arc(pivotX, pivotY, handR + swordSize * 0.45, screenTheta - 0.5, screenTheta + 0.5);
     ctx.stroke();
+
+    // sword sprite points up by default → +π/2 aligns it with screenTheta
+    drawRotatedSprite(ctx, sp.sword, cx, cy, screenTheta + Math.PI / 2, swordSize);
+    drawSprite(ctx, sp.hand, hx, hy, H * 0.24);
   }
+
   // parry ring
-  if (parry) {
+  if (o.parry) {
     ctx.strokeStyle = "#16a34a";
     ctx.lineWidth = 3;
     ctx.beginPath();
-    ctx.arc(x, y, R + 8, 0, Math.PI * 2);
+    ctx.arc(x, by, H * 0.5, 0, Math.PI * 2);
     ctx.stroke();
   }
 }

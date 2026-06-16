@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import * as sfx from "../sound";
 
 export interface ChatLine {
   id: number;
@@ -65,7 +66,10 @@ export default function ChatPanel({
   function submit(e: React.FormEvent) {
     e.preventDefault();
     const t = text.trim();
-    if (t) onSend(t);
+    if (t) {
+      onSend(t);
+      sfx.play("messageSent");
+    }
     setText("");
     inputRef.current?.blur();
   }
