@@ -48,6 +48,7 @@ export interface SnapPlayer {
   combo: number; // index of the swing currently animating (0-2), -1 idle
   parry: boolean;
   counter: boolean;
+  weapon: string; // equipped weapon key (selects the sword sprite)
   chat: string;
 }
 

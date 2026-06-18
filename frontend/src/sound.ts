@@ -60,13 +60,65 @@ const TUNING: Partial<Record<SoundName, { volume?: number; startAt?: number }>> 
   hit: { volume: 0.7 },
   messagePop: { volume: 0.6 },
   messageSent: { volume: 0.6 },
+  // Parry clips were too loud relative to everything else — pull them down.
+  parry: { volume: 0.45 },
+  parryAttack: { volume: 0.5 },
 };
 
-let masterVolume = 0.8;
-let muted = false;
+// Speaking (shopkeeper hum) plays at this fraction of master — bumped up so the
+// dialogue voice reads clearly over the rest of the mix.
+const SPEAKING_VOLUME = 0.85;
+
+// Persisted audio settings (master volume + mute) so the player's choice sticks
+// between sessions.
+const LS_VOLUME = "ck_volume";
+const LS_MUTED = "ck_muted";
+
+function loadNumber(key: string, fallback: number): number {
+  try {
+    const v = parseFloat(localStorage.getItem(key) ?? "");
+    return Number.isFinite(v) ? Math.min(1, Math.max(0, v)) : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+let masterVolume = loadNumber(LS_VOLUME, 0.8);
+let muted = (() => {
+  try {
+    return localStorage.getItem(LS_MUTED) === "1";
+  } catch {
+    return false;
+  }
+})();
+
+export function getMasterVolume() {
+  return masterVolume;
+}
+
+export function setMasterVolume(v: number) {
+  masterVolume = Math.min(1, Math.max(0, v));
+  try {
+    localStorage.setItem(LS_VOLUME, String(masterVolume));
+  } catch {
+    /* ignore */
+  }
+  // Apply live to the looping speaking element if it's playing.
+  if (speakingEl) speakingEl.volume = SPEAKING_VOLUME * masterVolume;
+}
+
+export function isMuted() {
+  return muted;
+}
 
 export function setMuted(v: boolean) {
   muted = v;
+  try {
+    localStorage.setItem(LS_MUTED, v ? "1" : "0");
+  } catch {
+    /* ignore */
+  }
+  if (muted) stopSpeaking();
 }
 
 export function play(name: SoundName) {
@@ -101,9 +153,10 @@ export function startSpeaking() {
   if (!speakingEl) {
     speakingEl = new Audio(speakingUrl);
     speakingEl.loop = true;
-    speakingEl.volume = 0.5 * masterVolume;
+    speakingEl.volume = SPEAKING_VOLUME * masterVolume;
   }
   try {
+    speakingEl.volume = SPEAKING_VOLUME * masterVolume;
     speakingEl.currentTime = 0;
     void speakingEl.play().catch(() => {});
   } catch {

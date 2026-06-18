@@ -158,9 +158,10 @@ class World:
             if rt.aim_x or rt.aim_y:
                 rt.facing = math.atan2(rt.aim_y, rt.aim_x)
 
-            # start a parry
+            # start a parry (some weapons hold the parry window open longer)
             if rt.in_parry and rt.parry_cd <= 0 and rt.parry_active <= 0:
-                rt.parry_active = C.PARRY_DURATION
+                pw = C.weapon_passive(rt.profile.weapon)
+                rt.parry_active = pw.get("parry_duration", C.PARRY_DURATION)
                 rt.parry_cd = C.PARRY_COOLDOWN
 
             # start the next swing of the 3-hit combo (down-up, up-down, thrust).
@@ -181,14 +182,32 @@ class World:
                 else:
                     rt.attack_cd = C.COMBO_INTERVAL * cd_mult
                     rt.combo_index = idx + 1
+                # two_stars: a charged swing releases the map-wide star burst.
+                self._weapon_on_swing(rt)
 
             if rt.attack_active > 0:
                 self._resolve_slash(rt)
 
+    def _weapon_on_swing(self, rt: PlayerRT) -> None:
+        """Effects that fire when a swing *starts* (independent of any target).
+        two_stars: release the accumulated star burst across the whole map."""
+        pw = C.weapon_passive(rt.profile.weapon)
+        if pw["key"] == "starfall" and rt.star_charge > 0:
+            base = rt.profile.attack + rt.star_charge
+            crit_ch = min(0.99, rt.profile.crit_chance + rt.star_crit)
+            for e in list(self.enemies):
+                crit = random.random() < crit_ch
+                self._damage_enemy(e, base * (2.0 if crit else 1.0), rt, crit)
+            rt.push_event("shockwave", x=round(rt.x, 1), y=round(rt.y, 1))
+            rt.star_charge = 0.0
+            rt.star_crit = 0.0
+
     def _resolve_slash(self, rt: PlayerRT) -> None:
+        pw = C.weapon_passive(rt.profile.weapon)
+        range_mult = pw.get("range_mult", 1.0)
         # The finishing thrust reaches a little further but through a tighter cone.
         is_thrust = rt.combo_active >= C.COMBO_LEN - 1
-        reach = C.ATTACK_RANGE + (C.THRUST_RANGE_BONUS if is_thrust else 0.0)
+        reach = (C.ATTACK_RANGE + (C.THRUST_RANGE_BONUS if is_thrust else 0.0)) * range_mult
         arc = C.THRUST_ARC if is_thrust else C.ATTACK_ARC
         targets = list(self.enemies)
         for e in targets:
@@ -202,20 +221,33 @@ class World:
             if diff > arc:
                 continue
             rt.attack_hit_ids.add(e.id)
-            dmg = float(rt.profile.attack)
-            crit = random.random() < rt.profile.crit_chance
+
+            # base attack + crit, including scythe's stacking syphon bonuses
+            atk = float(rt.profile.attack)
+            crit_ch = rt.profile.crit_chance
+            if pw["key"] == "syphon":
+                atk += rt.syphon_stacks * C.SCYTHE_SYPHON_ATK
+                crit_ch += rt.syphon_stacks * C.SCYTHE_SYPHON_CRIT
+            dmg = atk
+            is_counter = rt.counter_ready > 0
+            crit = random.random() < crit_ch
+            # drows: parry counters always crit
+            if pw["key"] == "bloodcrit" and is_counter:
+                crit = True
             if crit:
                 dmg *= 2.0
-            if rt.counter_ready > 0:
+            if is_counter:
                 dmg *= C.PARRY_BONUS
+                if pw["key"] == "heavy":  # long_blade: heavy parry counter
+                    dmg += C.LONG_COUNTER_FLAT
                 rt.counter_ready = 0.0
 
-            # --- weapon passives ---
-            pw = C.weapon_passive(rt.profile.weapon)
             # "execute": bonus damage to low-HP enemies (checked pre-hit)
             if pw["key"] == "execute" and e.hp <= C.EXECUTE_THRESHOLD * e.max_hp:
                 dmg *= C.EXECUTE_BONUS
             self._damage_enemy(e, dmg, rt, crit)
+
+            # --- on-hit weapon passives ---
             if pw["key"] == "lifesteal" and not rt.dead and rt.hp > 0:
                 rt.hp = min(rt.profile.max_hp, rt.hp + dmg * C.LIFESTEAL_PCT)
             elif pw["key"] == "frost":
@@ -224,6 +256,20 @@ class World:
                 e.burn_timer = C.BURN_TIME
                 e.burn_dps = (rt.profile.attack * C.BURN_PCT) / C.BURN_TIME
                 e.burn_by = rt
+            elif pw["key"] == "bleed":  # knife: chance to inflict a bleed
+                if random.random() < C.KNIFE_BLEED_CHANCE:
+                    e.bleed_timer = C.KNIFE_BLEED_TIME
+                    e.bleed_dps = e.max_hp * C.KNIFE_BLEED_PCT
+                    e.bleed_by = rt
+            elif pw["key"] == "syphon":  # scythe: grow stacks per landed hit
+                rt.syphon_stacks = min(C.SCYTHE_SYPHON_MAX, rt.syphon_stacks + 1)
+
+            # drows: each landed hit costs you HP (can be fatal)
+            if pw["key"] == "bloodcrit" and not rt.dead:
+                rt.hp -= C.DROWS_HIT_SELF_DMG
+                if rt.hp <= 0:
+                    self._kill_player(rt)
+                    return
 
     def _respawn(self, rt: PlayerRT) -> None:
         rt.dead = False
@@ -231,6 +277,10 @@ class World:
         rt.x = C.ARENA_W / 2 + random.uniform(-60, 60)
         rt.y = C.ARENA_H / 2 + random.uniform(-60, 60)
         rt.invuln = 2.0
+        # weapon stacks/charges don't survive death
+        rt.syphon_stacks = 0
+        rt.star_charge = 0.0
+        rt.star_crit = 0.0
         rt.push_event("respawn")
 
     # .................................................. enemy spawn / AI
@@ -288,15 +338,25 @@ class World:
         return best
 
     def _tick_enemies(self, dt: float) -> None:
-        # iterate a copy: burn damage-over-time can kill (and remove) enemies
+        # iterate a copy: burn/bleed damage-over-time can kill (and remove) enemies
         for e in list(self.enemies):
             if e.slow_timer > 0:
                 e.slow_timer -= dt
+            # burn + bleed damage-over-time (either can be the killing blow)
+            dot = 0.0
+            dot_by = None
             if e.burn_timer > 0:
                 e.burn_timer -= dt
-                e.hp -= e.burn_dps * dt
+                dot += e.burn_dps * dt
+                dot_by = e.burn_by
+            if e.bleed_timer > 0:
+                e.bleed_timer -= dt
+                dot += e.bleed_dps * dt
+                dot_by = e.bleed_by or dot_by
+            if dot > 0:
+                e.hp -= dot
                 if e.hp <= 0:
-                    by = e.burn_by
+                    by = dot_by
                     if by is None or by.profile.id not in self.players or not by.alive:
                         by = self._nearest_player(e)
                     if by is not None:
@@ -389,6 +449,17 @@ class World:
         if rt.dead or rt.invuln > 0:
             return
         if rt.parry_active > 0:
+            pw = C.weapon_passive(rt.profile.weapon)
+            if pw["key"] == "starfall":
+                # two_stars: keep the window open and bank the absorbed hit into
+                # the next strike's star burst. A short invuln keeps a single
+                # incoming hit from being counted twice.
+                rt.star_charge += C.STAR_ATK_PER
+                rt.star_crit = min(0.95, rt.star_crit + C.STAR_CRIT_PER)
+                rt.counter_ready = C.PARRY_COUNTER_WINDOW
+                rt.invuln = 0.08
+                rt.push_event("parry")
+                return
             rt.parry_active = 0.0
             rt.counter_ready = C.PARRY_COUNTER_WINDOW
             rt.invuln = 0.25
@@ -502,6 +573,7 @@ class World:
                     "combo": rt.combo_active,
                     "parry": rt.parry_active > 0,
                     "counter": rt.counter_ready > 0,
+                    "weapon": rt.profile.weapon,
                     "chat": rt.chat_text if rt.chat_ttl > 0 else "",
                 }
                 for rt in self.players.values()

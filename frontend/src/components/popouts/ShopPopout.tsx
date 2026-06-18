@@ -4,6 +4,7 @@ import type { Player, ShopItem } from "../../types";
 import * as sfx from "../../sound";
 import PopoutShell from "./PopoutShell";
 import shopkeeperImg from "../../assets/Shopkeeper.png";
+import { WEAPON_SPRITE_URLS } from "../../game/GameCanvas";
 
 // Placeholder shopkeeper personality, one line per item. The real shopkeeper
 // character/art comes later; these stand in for his banter.
@@ -20,6 +21,18 @@ const SHOPKEEPER: Record<string, string> = {
     "Careful with the Dragonfang — forged from a real raid-boss fang. It bites back.",
   eclipse_greatsword:
     "The Eclipse Greatsword... legends are written with blades like this. If you can wield it.",
+  curve_sword:
+    "The Curve Sword — that big sweeping reach? Perfect for when they come at you in waves.",
+  drows:
+    "Drows. Blade and handle swapped, aye. It'll hurt your hands, but oh, how it crits on a parry.",
+  knife:
+    "This Knife... I don't like keeping it in the shop. Fast, sharp, and it makes them bleed.",
+  long_blade:
+    "The Long Blade. Heavy as sin and slow — but land a parry counter and they simply cease to exist.",
+  scythe:
+    "The Scythe... feel that dread? Every soul it reaps makes it hungrier. And stronger.",
+  two_stars:
+    "Two Stars — gifted from the heavens themselves. Parry the storm, then loose it as a star across the whole field.",
   health_potion:
     "A potion? Smart. Nothing says 'I planned ahead' like not dying.",
 };
@@ -173,11 +186,21 @@ function ItemDetail({
   const equipped = isWeapon && player.weapon === item.key;
   const locked = isWeapon && player.cleared_raid < item.requires_raid;
 
+  const art = isWeapon ? WEAPON_SPRITE_URLS[item.key] : undefined;
+
   return (
     <div className="text-sm">
-      {/* image placeholder — no per-item art yet */}
-      <div className="mb-2 flex h-24 items-center justify-center rounded border border-dashed border-ink bg-black/5 text-xs text-muted">
-        {item.name} image
+      {/* weapon art (falls back to a placeholder for items without dedicated art) */}
+      <div className="mb-2 flex h-24 items-center justify-center rounded border border-ink bg-black/5 text-xs text-muted">
+        {art ? (
+          <img
+            src={art}
+            alt={item.name}
+            className="h-full w-full object-contain p-1"
+          />
+        ) : (
+          `${item.name} image`
+        )}
       </div>
       <div className="font-bold">{item.name}</div>
       {isWeapon ? (

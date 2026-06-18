@@ -10,14 +10,37 @@ import roundheadUrl from "../assets/Roundhead_Normal.png";
 import knightUrl from "../assets/Knight/Knight_Normal.png";
 import knightHandUrl from "../assets/Knight/Knight_Hand.png";
 import knightLegUrl from "../assets/Knight/Knight_Leg.png";
-import swordUrl from "../assets/Weapon/Rusty Sword.png";
+import rustySwordUrl from "../assets/Weapon/Rusty Sword.png";
+import ironSwordUrl from "../assets/Weapon/Iron Sword.png";
+import curveSwordUrl from "../assets/Weapon/Curve Sword.png";
+import drowsUrl from "../assets/Weapon/Drows.png";
+import knifeUrl from "../assets/Weapon/Knife.png";
+import longBladeUrl from "../assets/Weapon/Long Blade.png";
+import scytheUrl from "../assets/Weapon/Scythe.png";
+import twoStarsUrl from "../assets/Weapon/Two Stars.png";
 import type { GameClient } from "../net/socket";
 import type { Snapshot } from "../types";
+
+// Equipped-weapon key -> sword sprite. Weapons without dedicated art (the
+// saber/frost/dragonfang/eclipse tier) fall back to the rusty sword.
+export const WEAPON_SPRITE_URLS: Record<string, string> = {
+  rusty_sword: rustySwordUrl,
+  iron_blade: ironSwordUrl,
+  curve_sword: curveSwordUrl,
+  drows: drowsUrl,
+  knife: knifeUrl,
+  long_blade: longBladeUrl,
+  scythe: scytheUrl,
+  two_stars: twoStarsUrl,
+};
 
 const ARENA = { w: 1600, h: 1000 };
 
 // How long a dropped gold/exp pickup takes to fly into the player.
 const PICKUP_MS = 650;
+
+// How long a Two Stars shockwave takes to expand and fade.
+const SHOCKWAVE_MS = 650;
 
 interface Pickup {
   kind: "gold" | "exp";
@@ -67,7 +90,12 @@ interface KnightAnim {
   lastCombo: number;
   animCombo: number; // -1 idle, else 0..2
   animStart: number;
+  lastCounter: boolean; // previous frame's counter flag (to catch a parry land)
+  recoilStart: number; // performance.now() of the last parried-hit recoil
 }
+
+// How long the sword's backward "recoil" reads after a parried hit.
+const PARRY_RECOIL_MS = 220;
 
 // Motion smoothing: render positions ease toward the latest snapshot so the
 // 20Hz server updates look smooth at 60fps. SNAP_DIST teleports (no slide) on
@@ -133,6 +161,9 @@ export default function GameCanvas({
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const mouse = useRef({ x: 0, y: 0, down: false });
   const pickups = useRef<Pickup[]>([]);
+  // Two Stars "star burst" shockwaves: each expands outward from where it was
+  // released, then fades.
+  const shockwaves = useRef<{ x: number; y: number; born: number }[]>([]);
 
   // Sprites + the (stable) decoration field, created once.
   const sprites = useRef<Record<string, HTMLImageElement> | null>(null);
@@ -154,8 +185,12 @@ export default function GameCanvas({
       knight: mk(knightUrl),
       hand: mk(knightHandUrl),
       leg: mk(knightLegUrl),
-      sword: mk(swordUrl),
+      sword: mk(rustySwordUrl), // fallback when a weapon has no dedicated art
     };
+    // one sword sprite per weapon key, e.g. sprites["w_two_stars"]
+    for (const [key, url] of Object.entries(WEAPON_SPRITE_URLS)) {
+      sprites.current["w_" + key] = mk(url);
+    }
   }
   // Per-enemy attack animation state, driven by the snapshot `wind` flag.
   const enemyAnim = useRef<Map<number, EnemyAnim>>(new Map());
@@ -184,6 +219,18 @@ export default function GameCanvas({
         pickups.current.push({ kind: "gold", sx: ex + jitter(), sy: ey + jitter(), born: now });
       if ((msg.exp as number) > 0)
         pickups.current.push({ kind: "exp", sx: ex + jitter(), sy: ey + jitter(), born: now });
+    });
+    return off;
+  }, [client]);
+
+  // Two Stars: spawn an expanding star burst where the strike was released.
+  useEffect(() => {
+    const off = client.on((msg) => {
+      if (msg.type !== "event" || msg.kind !== "shockwave") return;
+      const x = msg.x as number | undefined;
+      const y = msg.y as number | undefined;
+      if (typeof x !== "number" || typeof y !== "number") return;
+      shockwaves.current.push({ x, y, born: performance.now() });
     });
     return off;
   }, [client]);
@@ -437,9 +484,17 @@ export default function GameCanvas({
         // advance this knight's walk + combo animation state
         let ka = knightAnim.current.get(p.id);
         if (!ka) {
-          ka = { walk: 0, px: sm.x, py: sm.y, lastCombo: -1, animCombo: -1, animStart: now };
+          ka = {
+            walk: 0, px: sm.x, py: sm.y, lastCombo: -1, animCombo: -1,
+            animStart: now, lastCounter: false, recoilStart: -1e9,
+          };
           knightAnim.current.set(p.id, ka);
         }
+        // A successful parry flips `counter` true the moment a hit is absorbed —
+        // catch that rising edge to kick off the sword's backward recoil.
+        if (p.counter && !ka.lastCounter) ka.recoilStart = now;
+        ka.lastCounter = p.counter;
+        const recoilT = clamp01((now - ka.recoilStart) / PARRY_RECOIL_MS);
         const moved = Math.hypot(sm.x - ka.px, sm.y - ka.py);
         ka.px = sm.x;
         ka.py = sm.y;
@@ -467,6 +522,8 @@ export default function GameCanvas({
             swingT: clamp01(comboT),
             parry: p.parry,
             counter: p.counter,
+            weapon: p.weapon,
+            recoilT: recoilT < 1 ? recoilT : -1,
           });
         }
         // name + level + hp
@@ -512,6 +569,22 @@ export default function GameCanvas({
           ctx.arc(sx(wx), sy(wy), 5, 0, Math.PI * 2);
           ctx.fill();
           ctx.stroke();
+        }
+      }
+
+      // Two Stars: expanding star-shaped shockwaves released by a charged strike.
+      if (shockwaves.current.length) {
+        shockwaves.current = shockwaves.current.filter((s) => now - s.born < SHOCKWAVE_MS);
+        for (const s of shockwaves.current) {
+          const t = (now - s.born) / SHOCKWAVE_MS;
+          const radius = 60 + t * 900; // expand outward across the arena
+          ctx.save();
+          ctx.globalAlpha = (1 - t) * 0.8;
+          ctx.strokeStyle = "#7c3aed";
+          ctx.lineWidth = 3;
+          drawStar(ctx, sx(s.x), sy(s.y), radius, radius * 0.5, 5);
+          ctx.stroke();
+          ctx.restore();
         }
       }
 
@@ -574,6 +647,27 @@ function drawRotatedSprite(
   ctx.rotate(angle);
   ctx.drawImage(img, -w / 2, -h / 2, w, h);
   ctx.restore();
+}
+
+// Trace an N-point star path (caller sets stroke/fill style and paints it).
+function drawStar(
+  ctx: CanvasRenderingContext2D,
+  cx: number,
+  cy: number,
+  outer: number,
+  inner: number,
+  points: number
+) {
+  ctx.beginPath();
+  for (let i = 0; i < points * 2; i++) {
+    const r = i % 2 === 0 ? outer : inner;
+    const a = (i * Math.PI) / points - Math.PI / 2;
+    const x = cx + Math.cos(a) * r;
+    const y = cy + Math.sin(a) * r;
+    if (i === 0) ctx.moveTo(x, y);
+    else ctx.lineTo(x, y);
+  }
+  ctx.closePath();
 }
 
 const clamp01 = (t: number) => Math.max(0, Math.min(1, t));
@@ -640,6 +734,8 @@ interface KnightDraw {
   swingT: number; // 0..1 progress through the current swing
   parry: boolean;
   counter: boolean;
+  weapon: string; // equipped weapon key (selects the sword sprite)
+  recoilT: number; // 0..1 through a parried-hit recoil, -1 when not recoiling
 }
 
 // Draw the knight from layered sprites: the body (with a little walk bob +
@@ -683,6 +779,9 @@ function drawKnight(
   drawSprite(ctx, sp.knight, x, by, H, flip);
   ctx.globalAlpha = 1;
   ctx.shadowBlur = 0;
+
+  // pick the equipped weapon's sprite (rusty sword as the fallback)
+  const swordSprite = sp["w_" + o.weapon] ?? sp.sword;
 
   // sword arm during an attack swing. The pivot sits at the knight's shoulder
   // (out to the facing side and below the head), and the swings stay fairly
@@ -728,17 +827,38 @@ function drawKnight(
     ctx.stroke();
 
     // sword sprite points up by default → +π/2 aligns it with screenTheta
-    drawRotatedSprite(ctx, sp.sword, cx, cy, screenTheta + Math.PI / 2, swordSize);
+    drawRotatedSprite(ctx, swordSprite, cx, cy, screenTheta + Math.PI / 2, swordSize);
     drawSprite(ctx, sp.hand, hx, hy, H * 0.24);
   }
 
-  // parry ring
-  if (o.parry) {
+  // parry: a defending stance — the sword is held upright in front of the
+  // knight, angled slightly toward the facing side. When a hit is parried it
+  // recoils backward briefly (recoilT), as if absorbing the blow. The stance is
+  // also held through the tail of the recoil so the flourish stays visible even
+  // after a normal parry's window has closed.
+  if ((o.parry || o.recoilT >= 0) && o.swing < 0) {
+    // 0→1→0 bump so the recoil snaps back then settles
+    const recoil = o.recoilT >= 0 ? Math.sin(o.recoilT * Math.PI) : 0;
+    // guard angle (screen space): pointing up, tilted forward; recoil tips it back
+    const theta = -Math.PI / 2 + dir * 0.32 - dir * recoil * 0.7;
+    const cos = Math.cos(theta);
+    const sin = Math.sin(theta);
+    // hand held out front; the recoil shoves the whole guard backward a touch
+    const hx = x + dir * H * 0.3 - dir * recoil * H * 0.18;
+    const hy = by + H * 0.06;
+    const swordSize = H * 1.05;
+    const cx = hx + cos * swordSize * 0.34;
+    const cy = hy + sin * swordSize * 0.34;
+
+    // faint guard ring (the existing parry tell)
     ctx.strokeStyle = "#16a34a";
-    ctx.lineWidth = 3;
+    ctx.lineWidth = 2;
     ctx.beginPath();
     ctx.arc(x, by, H * 0.5, 0, Math.PI * 2);
     ctx.stroke();
+
+    drawRotatedSprite(ctx, swordSprite, cx, cy, theta + Math.PI / 2, swordSize);
+    drawSprite(ctx, sp.hand, hx, hy, H * 0.24);
   }
 }
 

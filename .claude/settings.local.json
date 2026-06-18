@@ -15,7 +15,10 @@
       "Bash(npx tsc *)",
       "Bash(python -c \"import ast; [ast.parse\\(open\\(f\\).read\\(\\)\\) for f in ['app/game/world.py','app/game/entities.py','app/game/constants.py']]; print\\('OK: backend syntax valid'\\)\")",
       "Bash(npx vite *)",
-      "Bash(python -c ' *)"
+      "Bash(python -c ' *)",
+      "Bash(python -m py_compile app/game/constants.py app/game/entities.py app/game/world.py)",
+      "Bash(python -c \"from app.game import constants as C; [print\\(k, C.passive_text\\(k\\)\\) for k in C.WEAPONS]\")",
+      "Bash(python *)"
     ]
   }
 }

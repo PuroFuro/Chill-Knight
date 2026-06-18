@@ -83,6 +83,10 @@ class PlayerRT:
     parry_active: float = 0.0
     counter_ready: float = 0.0
     invuln: float = 0.0
+    # weapon-passive runtime state
+    syphon_stacks: int = 0  # scythe: stacking attack/crit from landed hits
+    star_charge: float = 0.0  # two_stars: accumulated attack from absorbed hits
+    star_crit: float = 0.0  # two_stars: accumulated crit from absorbed hits
     # lifecycle
     dead: bool = False
     respawn_in: float = 0.0
@@ -125,6 +129,9 @@ class Enemy:
     burn_timer: float = 0.0  # >0 while burning (damage over time)
     burn_dps: float = 0.0  # burn damage per second
     burn_by: "PlayerRT | None" = None  # who applied the burn (reward attribution)
+    bleed_timer: float = 0.0  # >0 while bleeding (knife damage over time)
+    bleed_dps: float = 0.0  # bleed damage per second (fraction of max HP)
+    bleed_by: "PlayerRT | None" = None  # who applied the bleed
 
 
 @dataclass

@@ -6,9 +6,18 @@ import HowToPlayPopout from "./popouts/HowToPlayPopout";
 import InventoryPopout from "./popouts/InventoryPopout";
 import PopoutShell from "./popouts/PopoutShell";
 import RaidPopout from "./popouts/RaidPopout";
+import SettingsPopout from "./popouts/SettingsPopout";
 import ShopPopout from "./popouts/ShopPopout";
 
-type Panel = "shop" | "inventory" | "raid" | "help" | "difficulty" | "logout" | null;
+type Panel =
+  | "shop"
+  | "inventory"
+  | "raid"
+  | "help"
+  | "difficulty"
+  | "settings"
+  | "logout"
+  | null;
 
 /**
  * Top-left hamburger menu and the pop-outs it opens (Shop, Inventory, Raid, How
@@ -64,6 +73,7 @@ export default function OverworldMenu({
     { label: "Raid", action: () => open("raid") },
     { label: "How to play", action: () => open("help") },
     { label: "Change Difficulty", action: () => open("difficulty") },
+    { label: "Settings", action: () => open("settings") },
     { label: "Logout", action: () => open("logout") },
   ];
 
@@ -164,6 +174,7 @@ export default function OverworldMenu({
         </PopoutShell>
       )}
       {panel === "help" && <HowToPlayPopout onClose={() => setPanel(null)} />}
+      {panel === "settings" && <SettingsPopout onClose={() => setPanel(null)} />}
       {panel === "difficulty" && (
         <ChangeDifficultyPopout
           current={meta.difficulty}
