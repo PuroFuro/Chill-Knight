@@ -54,7 +54,7 @@ export interface SnapPlayer {
 
 export interface SnapEnemy {
   id: number;
-  kind: "melee" | "ranged" | "boss";
+  kind: "melee" | "ranged" | "boss" | "dummy";
   x: number;
   y: number;
   hp: number;
@@ -69,6 +69,7 @@ export interface Snapshot {
   mode: "overworld" | "raid";
   difficulty: number;
   code: string | null;
+  started: boolean;
   ended: boolean;
   cleared: boolean;
   boss: { hp: number; maxHp: number } | null;

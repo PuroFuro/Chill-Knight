@@ -7,6 +7,9 @@ import grassUrl from "../assets/Grass.png";
 import rockUrl from "../assets/Rock.png";
 import rockSmallUrl from "../assets/Rock_Small.png";
 import roundheadUrl from "../assets/Roundhead_Normal.png";
+import dummyUrl from "../assets/Target_Dummy.png";
+import tile1Url from "../assets/Tile_1.png";
+import tile2Url from "../assets/Tile_2.png";
 import knightUrl from "../assets/Knight/Knight_Normal.png";
 import knightHandUrl from "../assets/Knight/Knight_Hand.png";
 import knightLegUrl from "../assets/Knight/Knight_Leg.png";
@@ -34,6 +37,14 @@ export const WEAPON_SPRITE_URLS: Record<string, string> = {
   two_stars: twoStarsUrl,
 };
 
+// Render-size multiplier for the held sword sprite. The big, long-reach blades
+// (the curve sword and the long blade, both with a range passive) are drawn
+// noticeably larger so they read as the big swords they are.
+export const WEAPON_SCALE: Record<string, number> = {
+  curve_sword: 1.5,
+  long_blade: 1.45,
+};
+
 const ARENA = { w: 1600, h: 1000 };
 
 // How long a dropped gold/exp pickup takes to fly into the player.
@@ -41,6 +52,27 @@ const PICKUP_MS = 650;
 
 // How long a Two Stars shockwave takes to expand and fade.
 const SHOCKWAVE_MS = 650;
+
+// Floating damage numbers (Terraria-style): shoot up quickly then decelerate.
+const DMG_MS = 950; // total lifetime of a damage number
+const DMG_RISE = 46; // px the number floats upward over its life
+const DMG_CRIT_GLOW_MS = 230; // how long a crit's red glow lasts
+
+// Practice-dummy bounce when struck (pivots on its base, top sways).
+const DUMMY_BOUNCE_MS = 520;
+
+// Raid-lobby floor tiling.
+const TILE_W = 112;
+const TILE_H = 86;
+
+interface DamageNumber {
+  x: number; // world-space spawn (the struck enemy)
+  y: number;
+  dx: number; // small horizontal drift so stacked hits fan out
+  dmg: number;
+  crit: boolean;
+  born: number;
+}
 
 interface Pickup {
   kind: "gold" | "exp";
@@ -147,6 +179,19 @@ function genDecor(): Decor[] {
   return out;
 }
 
+// Randomized raid-lobby floor: a grid of Tile_1 / Tile_2 chosen by a stable
+// PRNG so the pattern is fixed for the session (no shimmering), covering the
+// whole arena with a one-tile margin so the edges never show bare paper.
+function genTileMap(): Uint8Array {
+  const cols = Math.ceil(ARENA.w / TILE_W) + 2;
+  const rows = Math.ceil(ARENA.h / TILE_H) + 2;
+  const rng = mulberry32(0x7113);
+  const map = new Uint8Array(cols * rows);
+  for (let i = 0; i < map.length; i++) map[i] = rng() < 0.5 ? 0 : 1;
+  return map;
+}
+const TILE_COLS = Math.ceil(ARENA.w / TILE_W) + 2;
+
 export default function GameCanvas({
   client,
   snapshotRef,
@@ -164,6 +209,9 @@ export default function GameCanvas({
   // Two Stars "star burst" shockwaves: each expands outward from where it was
   // released, then fades.
   const shockwaves = useRef<{ x: number; y: number; born: number }[]>([]);
+  // Floating damage numbers, and the last-hit time per dummy (drives its bounce).
+  const damageNumbers = useRef<DamageNumber[]>([]);
+  const dummyHits = useRef<Map<number, number>>(new Map());
 
   // Sprites + the (stable) decoration field, created once.
   const sprites = useRef<Record<string, HTMLImageElement> | null>(null);
@@ -186,6 +234,9 @@ export default function GameCanvas({
       hand: mk(knightHandUrl),
       leg: mk(knightLegUrl),
       sword: mk(rustySwordUrl), // fallback when a weapon has no dedicated art
+      dummy: mk(dummyUrl),
+      tile1: mk(tile1Url),
+      tile2: mk(tile2Url),
     };
     // one sword sprite per weapon key, e.g. sprites["w_two_stars"]
     for (const [key, url] of Object.entries(WEAPON_SPRITE_URLS)) {
@@ -203,6 +254,8 @@ export default function GameCanvas({
   const lastFrame = useRef(performance.now());
   const decor = useRef<Decor[] | null>(null);
   if (!decor.current) decor.current = genDecor();
+  const tileMap = useRef<Uint8Array | null>(null);
+  if (!tileMap.current) tileMap.current = genTileMap();
 
   // Spawn gold (yellow) + exp (green) pickups at each kill that drift to the
   // player. Driven by the authoritative "reward" event, which carries the
@@ -219,6 +272,31 @@ export default function GameCanvas({
         pickups.current.push({ kind: "gold", sx: ex + jitter(), sy: ey + jitter(), born: now });
       if ((msg.exp as number) > 0)
         pickups.current.push({ kind: "exp", sx: ex + jitter(), sy: ey + jitter(), born: now });
+    });
+    return off;
+  }, [client]);
+
+  // Damage numbers: every landed hit reports its damage, crit flag, and the
+  // struck enemy's position + id. Spawn a floating number, and (for dummies)
+  // record the hit time so the dummy bounces.
+  useEffect(() => {
+    const off = client.on((msg) => {
+      if (msg.type !== "event" || msg.kind !== "hit") return;
+      const x = msg.x as number | undefined;
+      const y = msg.y as number | undefined;
+      if (typeof x !== "number" || typeof y !== "number") return;
+      const now = performance.now();
+      damageNumbers.current.push({
+        x,
+        y,
+        dx: (Math.random() - 0.5) * 22,
+        dmg: (msg.dmg as number) ?? 0,
+        crit: Boolean(msg.crit),
+        born: now,
+      });
+      if (damageNumbers.current.length > 60) damageNumbers.current.shift();
+      const eid = msg.eid as number | undefined;
+      if (typeof eid === "number") dummyHits.current.set(eid, now);
     });
     return off;
   }, [client]);
@@ -361,14 +439,30 @@ export default function GameCanvas({
       const sx = (wx: number) => wx - camX + W / 2;
       const sy = (wy: number) => wy - camY + H / 2;
 
-      // ground decorations (grass + rocks), only those near the viewport
-      for (const d of decor.current!) {
-        const dx = sx(d.x);
-        const dy = sy(d.y);
-        if (dx < -60 || dx > W + 60 || dy < -60 || dy > H + 60) continue;
-        const img =
-          d.kind === "grass" ? sp.grass : d.kind === "rock" ? sp.rock : sp.rockSmall;
-        drawSprite(ctx, img, dx, dy, d.size);
+      if (snap?.mode === "raid") {
+        // raid lobby / arena floor: a randomized Tile_1 / Tile_2 grid
+        const map = tileMap.current!;
+        const c0 = Math.max(0, Math.floor((camX - W / 2) / TILE_W) - 1);
+        const c1 = Math.floor((camX + W / 2) / TILE_W) + 1;
+        const r0 = Math.max(0, Math.floor((camY - H / 2) / TILE_H) - 1);
+        const r1 = Math.floor((camY + H / 2) / TILE_H) + 1;
+        for (let r = r0; r <= r1; r++) {
+          for (let c = c0; c <= c1; c++) {
+            const img = map[r * TILE_COLS + c] ? sp.tile2 : sp.tile1;
+            if (!img.complete || img.naturalWidth === 0) continue;
+            ctx.drawImage(img, sx(c * TILE_W), sy(r * TILE_H), TILE_W, TILE_H);
+          }
+        }
+      } else {
+        // overworld ground decorations (grass + rocks), only those near the viewport
+        for (const d of decor.current!) {
+          const dx = sx(d.x);
+          const dy = sy(d.y);
+          if (dx < -60 || dx > W + 60 || dy < -60 || dy > H + 60) continue;
+          const img =
+            d.kind === "grass" ? sp.grass : d.kind === "rock" ? sp.rock : sp.rockSmall;
+          drawSprite(ctx, img, dx, dy, d.size);
+        }
       }
 
       if (!snap) {
@@ -387,6 +481,35 @@ export default function GameCanvas({
         const sm = renderState.current.get("e" + e.id)!;
         const ex = sx(sm.x);
         const ey = sy(sm.y);
+
+        // practice dummy: an inert target that bounces when struck. It pivots on
+        // its base so the top sways side-to-side (like a real punching dummy),
+        // the sway decaying after each hit.
+        if (e.kind === "dummy") {
+          const size = 74;
+          const img = sp.dummy;
+          let sway = 0;
+          const hit = dummyHits.current.get(e.id);
+          if (hit !== undefined) {
+            const bt = (now - hit) / DUMMY_BOUNCE_MS;
+            if (bt < 1) sway = Math.sin(bt * Math.PI * 3) * (1 - bt) * 0.38;
+            else dummyHits.current.delete(e.id);
+          }
+          const footY = ey + size * 0.42;
+          shadow(ctx, ex, footY, size * 0.3);
+          if (img.complete && img.naturalWidth > 0) {
+            const ar = img.naturalWidth / img.naturalHeight;
+            const h = size;
+            const w = size * ar;
+            ctx.save();
+            ctx.translate(ex, footY);
+            ctx.rotate(sway); // pivot on the base
+            ctx.drawImage(img, -w / 2, -h, w, h);
+            ctx.restore();
+          }
+          continue;
+        }
+
         const facing = sm.facing;
         const flip = Math.cos(facing) < 0; // face the target (left vs right)
         const isBoss = e.kind === "boss";
@@ -588,6 +711,51 @@ export default function GameCanvas({
         }
       }
 
+      // floating damage numbers (Terraria-style): shoot up fast, then slow.
+      if (damageNumbers.current.length) {
+        damageNumbers.current = damageNumbers.current.filter(
+          (d) => now - d.born < DMG_MS
+        );
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        ctx.lineJoin = "round";
+        for (const dn of damageNumbers.current) {
+          const t = (now - dn.born) / DMG_MS;
+          // ease-out rise: quick off the enemy, decelerating as it climbs
+          const rise = (1 - Math.pow(1 - t, 2.4)) * DMG_RISE;
+          const px = sx(dn.x + dn.dx);
+          const py = sy(dn.y) - 26 - rise;
+          // fade out over the last third of the life
+          const alpha = t > 0.66 ? Math.max(0, (1 - t) / 0.34) : 1;
+          // crits pop a touch bigger with a brief settle
+          const pop = dn.crit ? 1 + Math.max(0, 1 - t * 6) * 0.5 : 1;
+          const fontPx = (dn.crit ? 26 : 18) * pop;
+          ctx.save();
+          ctx.globalAlpha = alpha;
+          ctx.font = `bold ${fontPx}px 'KyivType Serif', serif`;
+          const text = String(dn.dmg);
+          if (dn.crit) {
+            // red outline + a short-lived red glow so crits really pop
+            const glow = Math.max(0, 1 - (now - dn.born) / DMG_CRIT_GLOW_MS);
+            ctx.shadowColor = `rgba(220,38,38,${0.9 * glow})`;
+            ctx.shadowBlur = 4 + 20 * glow;
+            ctx.lineWidth = 4;
+            ctx.strokeStyle = "#dc2626";
+            ctx.strokeText(text, px, py);
+            ctx.shadowBlur = 0;
+            ctx.fillStyle = glow > 0.05 ? "#ffe2e2" : "#ffffff";
+            ctx.fillText(text, px, py);
+          } else {
+            ctx.lineWidth = 3.5;
+            ctx.strokeStyle = "#111111";
+            ctx.strokeText(text, px, py);
+            ctx.fillStyle = "#ffffff";
+            ctx.fillText(text, px, py);
+          }
+          ctx.restore();
+        }
+      }
+
       raf = requestAnimationFrame(draw);
     };
     raf = requestAnimationFrame(draw);
@@ -782,6 +950,8 @@ function drawKnight(
 
   // pick the equipped weapon's sprite (rusty sword as the fallback)
   const swordSprite = sp["w_" + o.weapon] ?? sp.sword;
+  // big-sword weapons render their blade larger (see WEAPON_SCALE)
+  const wscale = WEAPON_SCALE[o.weapon] ?? 1;
 
   // sword arm during an attack swing. The pivot sits at the knight's shoulder
   // (out to the facing side and below the head), and the swings stay fairly
@@ -815,7 +985,7 @@ function drawKnight(
     const hy = pivotY + sin * handR;
     // the sword is held IN the hand: offset its centre just past the hand so the
     // grip lands on the hand and the blade extends away from it.
-    const swordSize = H * 1.15;
+    const swordSize = H * 1.15 * wscale;
     const cx = hx + cos * (swordSize * 0.38);
     const cy = hy + sin * (swordSize * 0.38);
 
@@ -846,7 +1016,7 @@ function drawKnight(
     // hand held out front; the recoil shoves the whole guard backward a touch
     const hx = x + dir * H * 0.3 - dir * recoil * H * 0.18;
     const hy = by + H * 0.06;
-    const swordSize = H * 1.05;
+    const swordSize = H * 1.05 * wscale;
     const cx = hx + cos * swordSize * 0.34;
     const cy = hy + sin * swordSize * 0.34;
 

@@ -54,12 +54,12 @@ export default function InventoryPopout({
 
       <div className="flex gap-4">
         {/* owned list */}
-        <div className="max-h-[46vh] w-1/2 space-y-1 overflow-y-auto pr-1">
+        <div className="max-h-[46vh] w-1/2 space-y-0.5 overflow-y-auto pr-1">
           {owned.map((it) => (
             <button
               key={it.key}
               onClick={() => setSelected(it.key)}
-              className={`flex w-full items-center justify-between rounded border px-3 py-1.5 text-sm ${
+              className={`flex w-full items-center justify-between rounded border px-3 py-1 text-sm ${
                 selected === it.key
                   ? "border-ink bg-black/10"
                   : "border-transparent hover:bg-black/5"

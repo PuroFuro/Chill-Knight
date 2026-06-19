@@ -19,21 +19,23 @@ export default function Hud({
   onPotion,
 }: {
   stats: StatsMsg | null;
-  meta: { mode: string; difficulty: number; code: string | null };
+  meta: { mode: string; difficulty: number; code: string | null; started?: boolean };
   boss: { hp: number; maxHp: number } | null;
   events: GameEvent[];
   onPotion: () => void;
 }) {
   const hpPct = stats ? stats.hp / stats.maxHp : 0;
   const expPct = stats && stats.expToNext > 0 ? stats.exp / stats.expToNext : 1;
-  const title = meta.mode === "raid" ? "Raid" : "Overworld";
+  const isLobby = meta.mode === "raid" && meta.started === false;
 
   return (
     <>
       {/* top-center: world title + (raid) code + boss bar */}
       <div className="pointer-events-none absolute left-1/2 top-5 -translate-x-1/2 text-center">
         <h2 className="font-display text-3xl font-bold text-ink">
-          {title} - Difficulty {meta.difficulty}
+          {isLobby
+            ? "Raid Lobby"
+            : `${meta.mode === "raid" ? "Raid" : "Overworld"} - Difficulty ${meta.difficulty}`}
         </h2>
         {meta.mode === "raid" && meta.code && (
           <div className="mt-1 text-sm text-muted">

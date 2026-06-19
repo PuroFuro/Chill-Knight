@@ -196,8 +196,8 @@ WEAPONS: dict[str, dict] = {
     },
     "frost_edge": {
         "name": "Frost Edge", "price": 1600, "attack": 30,
-        "crit_bonus": 0.08, "requires_raid": 5,
-        "description": "Chills foes to the bone. Requires raid 5 cleared.",
+        "crit_bonus": 0.08, "requires_raid": 0,
+        "description": "Chills foes to the bone.",
         "passive": {
             "key": "frost", "name": "Frostbite", "cd_mult": 1.0,
             "desc": f"Struck enemies are slowed by {int((1 - FROST_SLOW_MULT) * 100)}% "
@@ -206,8 +206,8 @@ WEAPONS: dict[str, dict] = {
     },
     "dragonfang": {
         "name": "Dragonfang", "price": 4200, "attack": 52,
-        "crit_bonus": 0.12, "requires_raid": 15,
-        "description": "Forged from a raid-boss fang. Requires raid 15 cleared.",
+        "crit_bonus": 0.12, "requires_raid": 0,
+        "description": "Forged from a raid-boss fang.",
         "passive": {
             "key": "burn", "name": "Searing", "cd_mult": 1.0,
             "desc": f"Hits ignite enemies for {int(BURN_PCT * 100)}% of your attack "
@@ -216,8 +216,8 @@ WEAPONS: dict[str, dict] = {
     },
     "eclipse_greatsword": {
         "name": "Eclipse Greatsword", "price": 11000, "attack": 90,
-        "crit_bonus": 0.18, "requires_raid": 30,
-        "description": "A legend among knights. Requires raid 30 cleared.",
+        "crit_bonus": 0.18, "requires_raid": 0,
+        "description": "A legend among knights.",
         "passive": {
             "key": "execute", "name": "Eclipse", "cd_mult": 1.0,
             "desc": f"Deal +{int((EXECUTE_BONUS - 1) * 100)}% damage to enemies below "

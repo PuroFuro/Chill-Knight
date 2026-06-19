@@ -7,6 +7,7 @@ import Hud, { type GameEvent } from "./components/Hud";
 import KillPopups, { type KillPopup } from "./components/KillPopups";
 import LeaderboardToggle from "./components/LeaderboardToggle";
 import OverworldMenu from "./components/OverworldMenu";
+import RaidLobby from "./components/RaidLobby";
 import TitleScreen from "./components/TitleScreen";
 import GameCanvas from "./game/GameCanvas";
 import { GameClient } from "./net/socket";
@@ -29,6 +30,9 @@ export default function App() {
     code: null as string | null,
   });
   const [boss, setBoss] = useState<{ hp: number; maxHp: number } | null>(null);
+  // Whether the current raid has started (false = lobby). Always effectively
+  // true in the overworld.
+  const [started, setStarted] = useState(false);
   const [events, setEvents] = useState<GameEvent[]>([]);
   const [chat, setChat] = useState<ChatLine[]>([]);
   const [popups, setPopups] = useState<KillPopup[]>([]);
@@ -58,6 +62,7 @@ export default function App() {
   const resetWorldState = useCallback(() => {
     setStats(null);
     setBoss(null);
+    setStarted(false);
     setEvents([]);
     setChat([]);
     setPopups([]);
@@ -101,6 +106,7 @@ export default function App() {
           break;
         case "state":
           snapshotRef.current = msg;
+          setStarted((prev) => (prev === msg.started ? prev : msg.started));
           setBoss((prev) => {
             const b = msg.boss;
             if (!b && !prev) return prev;
@@ -285,11 +291,19 @@ export default function App() {
 
       <Hud
         stats={stats}
-        meta={meta}
+        meta={{ ...meta, started }}
         boss={boss}
         events={events}
         onPotion={() => clientRef.current?.usePotion()}
       />
+
+      {meta.mode === "raid" && !started && (
+        <RaidLobby
+          code={meta.code}
+          difficulty={meta.difficulty}
+          onStart={(d) => clientRef.current?.startRaid(d)}
+        />
+      )}
 
       {player && (
         <OverworldMenu

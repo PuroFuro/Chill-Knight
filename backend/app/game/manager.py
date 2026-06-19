@@ -166,6 +166,23 @@ class GameManager:
         if w:
             w.use_potion(conn.profile.id)
 
+    def on_start_raid(self, conn: Connection, difficulty: int) -> None:
+        w = self._world_for(conn)
+        if w is None or w.mode != "raid" or w.started:
+            return
+        w.start_raid(difficulty)
+        # Refresh every lobby member's HUD with the chosen difficulty.
+        joined = {
+            "type": "joined",
+            "playerId": conn.profile.id,
+            "mode": w.mode,
+            "difficulty": w.difficulty,
+            "code": w.code,
+            "arena": {"w": C.ARENA_W, "h": C.ARENA_H},
+        }
+        for c in self._conns_in(w.key):
+            c.send({**joined, "playerId": c.profile.id})
+
     def _conns_in(self, key: str):
         return [c for c in self.connections.values() if c.world_key == key]
 

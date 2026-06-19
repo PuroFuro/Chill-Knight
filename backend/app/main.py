@@ -93,6 +93,8 @@ async def game_ws(ws: WebSocket):
                 manager.on_chat(conn, str(msg.get("text", "")))
             elif kind == "use_potion":
                 manager.on_use_potion(conn)
+            elif kind == "start_raid":
+                manager.on_start_raid(conn, msg.get("difficulty", 1))
             elif kind == "leave":
                 manager.leave(conn)
                 conn.send({"type": "world_closed", "reason": "left"})

@@ -2,6 +2,19 @@
 @tailwind components;
 @tailwind utilities;
 
+/* Self-hosted KyivType Serif (the design's display/body face). Previously
+   loaded from fonts.cdnfonts.com, but that endpoint 500s, so the site silently
+   fell back to a different font. Bundling the woff2 makes the font load
+   reliably and match the reference designs. Bold weights are synthesized from
+   this regular master. */
+@font-face {
+  font-family: "KyivType Serif";
+  src: url("./assets/fonts/KyivTypeSerif.woff2") format("woff2");
+  font-weight: 400 900;
+  font-style: normal;
+  font-display: swap;
+}
+
 html,
 body,
 #root {

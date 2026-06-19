@@ -73,6 +73,10 @@ export class GameClient {
     this.send({ type: "use_potion" });
   }
 
+  startRaid(difficulty: number) {
+    this.send({ type: "start_raid", difficulty });
+  }
+
   setInput(patch: Partial<InputState>) {
     this.input = { ...this.input, ...patch };
   }

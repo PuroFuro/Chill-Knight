@@ -30,8 +30,12 @@ class World:
         self.ended = False  # raid finished (cleared or wiped)
         self.cleared = False
         self.boss: Enemy | None = None
+        # Raids open in a lobby (no boss): players gather, test damage on the
+        # target dummies, pick a difficulty, then start the fight. Overworlds are
+        # always "started" (the flag is only meaningful for raids).
+        self.started = mode != "raid"
         if mode == "raid":
-            self._spawn_boss()
+            self._spawn_dummies()
 
     # ------------------------------------------------------------------ ids
     def _eid(self) -> int:
@@ -46,7 +50,12 @@ class World:
             y=C.ARENA_H / 2 + random.uniform(-80, 80),
             hp=profile.max_hp,
         )
-        if self.mode == "raid":
+        if self.mode == "raid" and not self.started:
+            rt.push_event(
+                "info",
+                message="Raid lobby — warm up on the dummies, then start the raid.",
+            )
+        elif self.mode == "raid":
             rt.push_event("info", message=f"Raid difficulty {self.difficulty} — good luck, knight.")
         self.players[profile.id] = rt
         return rt
@@ -140,7 +149,9 @@ class World:
                 rt.combo_active = -1
 
             if rt.dead:
-                if self.mode == "overworld":
+                # Overworld respawns normally; the raid lobby is a safe practice
+                # space so it respawns too (a started raid does not).
+                if self.mode == "overworld" or not self.started:
                     rt.respawn_in -= dt
                     if rt.respawn_in <= 0:
                         self._respawn(rt)
@@ -163,6 +174,13 @@ class World:
                 pw = C.weapon_passive(rt.profile.weapon)
                 rt.parry_active = pw.get("parry_duration", C.PARRY_DURATION)
                 rt.parry_cd = C.PARRY_COOLDOWN
+                # In raids there's nothing to bait a parry off of (the dummies
+                # don't swing, and players just want to practise the counter), so
+                # raising the guard immediately arms the counter — the next swing
+                # lands as a parry attack.
+                if self.mode == "raid":
+                    rt.counter_ready = C.PARRY_COUNTER_WINDOW
+                    rt.push_event("parry")
 
             # start the next swing of the 3-hit combo (down-up, up-down, thrust).
             # Cooldown between swings is short (COMBO_INTERVAL); the chain rests
@@ -296,6 +314,32 @@ class World:
         self.boss = b
         self.enemies.append(b)
 
+    def _spawn_dummies(self) -> None:
+        """Four practice dummies in a box near the middle of the lobby, spaced
+        far enough apart that a single swing can't tag more than one."""
+        cx, cy = C.ARENA_W / 2, C.ARENA_H / 2
+        off = 90.0
+        for dx, dy in ((-off, -off), (off, -off), (-off, off), (off, off)):
+            self.enemies.append(Enemy(
+                id=self._eid(), kind="dummy", x=cx + dx, y=cy + dy,
+                hp=1e9, max_hp=1e9, dmg=0.0, speed=0.0, rng=0.0, cd=1e9, windup=0.0,
+                radius=C.ENEMY_RADIUS,
+            ))
+
+    def start_raid(self, difficulty: int) -> None:
+        """Leave the lobby: clear the dummies and spawn the boss to begin the
+        fight at the chosen difficulty. No-op if the raid already started."""
+        if self.mode != "raid" or self.started:
+            return
+        self.difficulty = max(C.MIN_DIFFICULTY, min(C.MAX_DIFFICULTY, int(difficulty)))
+        self.started = True
+        self.enemies = [e for e in self.enemies if e.kind != "dummy"]
+        self.add_timer = 6.0
+        self.spawn_timer = C.spawn_interval(self.difficulty, max(1, len(self.players)))
+        self._spawn_boss()
+        for rt in self.players.values():
+            rt.push_event("info", message=f"Raid difficulty {self.difficulty} — good luck, knight.")
+
     def _edge_point(self) -> tuple[float, float]:
         side = random.randint(0, 3)
         if side == 0:
@@ -323,6 +367,8 @@ class World:
             if self.spawn_timer <= 0 and len(self.enemies) < C.max_enemies(n):
                 self.enemies.append(self._make_enemy(random.choice(["melee", "ranged"])))
                 self.spawn_timer = C.spawn_interval(self.difficulty, n)
+        elif not self.started:
+            return  # lobby: no minions until the raid is started
         else:  # raid: occasional minions alongside the boss
             self.add_timer -= dt
             if self.add_timer <= 0 and len([e for e in self.enemies if e.kind != "boss"]) < 4:
@@ -340,6 +386,8 @@ class World:
     def _tick_enemies(self, dt: float) -> None:
         # iterate a copy: burn/bleed damage-over-time can kill (and remove) enemies
         for e in list(self.enemies):
+            if e.kind == "dummy":
+                continue  # inert practice dummies: no movement, no attacks, no DoT
             if e.slow_timer > 0:
                 e.slow_timer -= dt
             # burn + bleed damage-over-time (either can be the killing blow)
@@ -482,12 +530,20 @@ class World:
             p.dirty = True
             rt.respawn_in = C.RESPAWN_DELAY
             rt.push_event("death", gold_lost=lost_g, exp_lost=lost_e)
+        elif not self.started:
+            # Raid lobby: no penalty, just respawn after the usual delay.
+            rt.respawn_in = C.RESPAWN_DELAY
+            rt.push_event("death", gold_lost=0, exp_lost=0)
         else:
             rt.push_event("death", gold_lost=0, exp_lost=0)
 
     def _damage_enemy(self, e: Enemy, dmg: float, by: PlayerRT, crit: bool) -> None:
+        # `eid` lets the client tie the damage number (and the dummy's bounce)
+        # to the specific enemy that was struck.
+        by.push_event("hit", crit=crit, dmg=int(dmg), x=e.x, y=e.y, eid=e.id)
+        if e.kind == "dummy":
+            return  # practice dummies soak hits forever; they never die
         e.hp -= dmg
-        by.push_event("hit", crit=crit, dmg=int(dmg), x=e.x, y=e.y)
         if e.hp <= 0:
             self._kill_enemy(e, by)
 
@@ -537,7 +593,7 @@ class World:
                 rt.push_event("levelup", level=lvl)
 
     def _check_raid_state(self) -> None:
-        if self.mode != "raid" or self.ended:
+        if self.mode != "raid" or self.ended or not self.started:
             return
         if self.players and not self.alive_players():
             self.ended = True
@@ -552,6 +608,7 @@ class World:
             "mode": self.mode,
             "difficulty": self.difficulty,
             "code": self.code,
+            "started": self.started,
             "ended": self.ended,
             "cleared": self.cleared,
             "boss": (
