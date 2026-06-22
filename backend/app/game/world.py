@@ -11,7 +11,7 @@ import math
 import random
 
 from . import constants as C
-from .entities import Enemy, PlayerRT, Profile, Projectile, dist
+from .entities import Enemy, PlayerRT, Profile, Projectile, SlimeBall, dist
 
 
 class World:
@@ -23,10 +23,15 @@ class World:
         self.players: dict[int, PlayerRT] = {}
         self.enemies: list[Enemy] = []
         self.projectiles: list[Projectile] = []
+        self.slime_balls: list[SlimeBall] = []
         self._next_id = 1
         self.tick_count = 0
         self.spawn_timer = C.spawn_interval(difficulty, 1)
         self.add_timer = 6.0  # raid trickle of minions
+        # Overworld slime-invasion state (see _tick_invasion): a timed event
+        # that floods the overworld with mini-slimes and quickens spawns.
+        self.invasion_timer = 0.0
+        self.invasion_roll_timer = C.INVASION_ROLL_INTERVAL
         self.ended = False  # raid finished (cleared or wiped)
         self.cleared = False
         self.boss: Enemy | None = None
@@ -131,7 +136,14 @@ class World:
         self._spawn(dt)
         self._tick_enemies(dt)
         self._tick_projectiles(dt)
+        self._tick_slime_balls(dt)
         self._check_raid_state()
+
+    def _broadcast_event(self, kind: str, **data) -> None:
+        """Queue a one-shot fx event (sound / screen-shake) for every player in
+        the world, so the whole party sees and hears the slime's antics."""
+        for rt in self.players.values():
+            rt.push_event(kind, **data)
 
     # .................................................. player movement/cmd
     def _tick_players(self, dt: float) -> None:
@@ -139,6 +151,9 @@ class World:
             for t in ("attack_cd", "attack_active", "parry_cd", "parry_active",
                       "counter_ready", "invuln", "chat_ttl"):
                 setattr(rt, t, max(0.0, getattr(rt, t) - dt))
+            # the banked parry counter clears once its window lapses
+            if rt.counter_ready <= 0:
+                rt.parry_count = 0
 
             # The combo chain resets to the first swing if the player pauses.
             if rt.combo_window > 0:
@@ -180,6 +195,7 @@ class World:
                 # lands as a parry attack.
                 if self.mode == "raid":
                     rt.counter_ready = C.PARRY_COUNTER_WINDOW
+                    rt.parry_count = max(1, rt.parry_count)
                     rt.push_event("parry")
 
             # start the next swing of the 3-hit combo (down-up, up-down, thrust).
@@ -231,6 +247,10 @@ class World:
         for e in targets:
             if e.id in rt.attack_hit_ids:
                 continue
+            # the slime boss is untouchable while it's leaping / airborne —
+            # you can only land hits once it's back on the ground (or crashing).
+            if e.kind == "boss" and e.phase not in ("ground", "crash"):
+                continue
             d = dist(rt.x, rt.y, e.x, e.y)
             if d > reach + e.radius:
                 continue
@@ -259,6 +279,7 @@ class World:
                 if pw["key"] == "heavy":  # long_blade: heavy parry counter
                     dmg += C.LONG_COUNTER_FLAT
                 rt.counter_ready = 0.0
+                rt.parry_count = 0
 
             # "execute": bonus damage to low-HP enemies (checked pre-hit)
             if pw["key"] == "execute" and e.hp <= C.EXECUTE_THRESHOLD * e.max_hp:
@@ -299,6 +320,8 @@ class World:
         rt.syphon_stacks = 0
         rt.star_charge = 0.0
         rt.star_crit = 0.0
+        rt.counter_ready = 0.0
+        rt.parry_count = 0
         rt.push_event("respawn")
 
     # .................................................. enemy spawn / AI
@@ -308,9 +331,11 @@ class World:
             id=self._eid(), kind="boss",
             x=C.ARENA_W / 2, y=C.ARENA_H / 4,
             hp=C.boss_hp(d), max_hp=C.boss_hp(d),
-            dmg=C.boss_dmg(d), speed=70.0 + d, rng=70.0, cd=1.6, windup=0.7,
+            dmg=C.boss_dmg(d), speed=C.BOSS_SPEED + d, rng=0.0, cd=0.0, windup=0.0,
             radius=C.BOSS_RADIUS,
         )
+        b.phase = "ground"
+        b.special_cd = C.BOSS_SPECIAL_INTERVAL
         self.boss = b
         self.enemies.append(b)
 
@@ -363,17 +388,39 @@ class World:
     def _spawn(self, dt: float) -> None:
         n = max(1, len(self.players))
         if self.mode == "overworld":
+            self._tick_invasion(dt)
             self.spawn_timer -= dt
             if self.spawn_timer <= 0 and len(self.enemies) < C.max_enemies(n):
-                self.enemies.append(self._make_enemy(random.choice(["melee", "ranged"])))
-                self.spawn_timer = C.spawn_interval(self.difficulty, n)
+                # During an invasion, some spawns come in as marching mini-slimes
+                # and everything spawns noticeably faster.
+                if self.invasion_timer > 0 and random.random() < C.INVASION_MINISLIME_CHANCE:
+                    self._spawn_minislime(*self._edge_point())
+                else:
+                    self.enemies.append(self._make_enemy(random.choice(["melee", "ranged"])))
+                mult = C.INVASION_SPAWN_MULT if self.invasion_timer > 0 else 1.0
+                self.spawn_timer = C.spawn_interval(self.difficulty, n) * mult
         elif not self.started:
             return  # lobby: no minions until the raid is started
-        else:  # raid: occasional minions alongside the boss
+        else:  # raid: minions alongside the boss (spawn faster, larger swarm)
             self.add_timer -= dt
-            if self.add_timer <= 0 and len([e for e in self.enemies if e.kind != "boss"]) < 4:
+            if self.add_timer <= 0 and len([e for e in self.enemies if e.kind != "boss"]) < 6:
                 self.enemies.append(self._make_enemy(random.choice(["melee", "ranged"])))
-                self.add_timer = max(4.0, 9.0 - 0.1 * self.difficulty)
+                self.add_timer = max(2.5, 6.0 - 0.1 * self.difficulty)
+
+    def _tick_invasion(self, dt: float) -> None:
+        """Overworld only: count down an active slime invasion, and otherwise
+        roll occasionally to unleash a new one (small chance per roll)."""
+        if self.invasion_timer > 0:
+            self.invasion_timer = max(0.0, self.invasion_timer - dt)
+            if self.invasion_timer == 0:
+                self._broadcast_event("info", message="The slime invasion has subsided.")
+            return
+        self.invasion_roll_timer -= dt
+        if self.invasion_roll_timer <= 0:
+            self.invasion_roll_timer = C.INVASION_ROLL_INTERVAL
+            if self.players and random.random() < C.INVASION_CHANCE:
+                self.invasion_timer = C.INVASION_DURATION
+                self._broadcast_event("invasion", message="Slimes are invading!")
 
     def _nearest_player(self, e: Enemy) -> PlayerRT | None:
         best, bd = None, 1e9
@@ -391,18 +438,28 @@ class World:
             if e.slow_timer > 0:
                 e.slow_timer -= dt
             # burn + bleed damage-over-time (either can be the killing blow)
-            dot = 0.0
-            dot_by = None
+            burn_dmg = 0.0
+            bleed_dmg = 0.0
             if e.burn_timer > 0:
                 e.burn_timer -= dt
-                dot += e.burn_dps * dt
-                dot_by = e.burn_by
+                burn_dmg = e.burn_dps * dt
             if e.bleed_timer > 0:
                 e.bleed_timer -= dt
-                dot += e.bleed_dps * dt
-                dot_by = e.bleed_by or dot_by
+                bleed_dmg = e.bleed_dps * dt
+            dot = burn_dmg + bleed_dmg
+            dot_by = e.burn_by if burn_dmg > 0 else None
+            dot_by = (e.bleed_by or dot_by) if bleed_dmg > 0 else dot_by
             if dot > 0:
                 e.hp -= dot
+                # Bank the per-type damage and emit a colored floating number
+                # (orange for ignite, crimson for bleed) every DOT_NUMBER_INTERVAL.
+                e.burn_accum += burn_dmg
+                e.bleed_accum += bleed_dmg
+                e.dot_timer -= dt
+                if e.dot_timer <= 0:
+                    self._emit_dot(e, "burn", "#f97316")
+                    self._emit_dot(e, "bleed", "#be123c")
+                    e.dot_timer = C.DOT_NUMBER_INTERVAL
                 if e.hp <= 0:
                     by = dot_by
                     if by is None or by.profile.id not in self.players or not by.alive:
@@ -412,6 +469,15 @@ class World:
                     elif e in self.enemies:
                         self.enemies.remove(e)
                     continue
+
+            # slimes don't swing: the boss runs its jump-slam phase machine and
+            # the mini-slimes just chase, both dealing damage on contact.
+            if e.kind == "boss":
+                self._tick_boss(e, dt)
+                continue
+            if e.kind == "minislime":
+                self._tick_minislime(e, dt)
+                continue
 
             target = self._nearest_player(e)
             if target is None:
@@ -473,6 +539,146 @@ class World:
             if dist(e.x, e.y, rt.x, rt.y) <= e.rng + e.radius + C.PLAYER_RADIUS:
                 self._damage_player(rt, e.dmg)
 
+    # ............................................................ slime boss
+    def _tick_boss(self, b: Enemy, dt: float) -> None:
+        """Drive the slime boss's phase machine: chase + contact damage on the
+        ground, and a periodic jump-slam that telegraphs a landing spot before
+        crashing down and scattering mini-slimes."""
+        target = self._nearest_player(b)
+        if target is not None:
+            b.facing = math.atan2(target.y - b.y, target.x - b.x)
+
+        if b.phase == "ground":
+            if target is not None:
+                d = dist(b.x, b.y, target.x, target.y)
+                if d > b.radius + C.PLAYER_RADIUS - 4:
+                    self._move(b, target, 1, dt)
+                self._contact_attack(b, dt)
+                b.special_cd -= dt
+                if b.special_cd <= 0:
+                    b.phase = "anticipate"
+                    b.phase_timer = C.BOSS_ANTICIPATE
+        elif b.phase == "anticipate":
+            b.phase_timer -= dt
+            if b.phase_timer <= 0:
+                b.phase = "air"
+                b.phase_timer = C.BOSS_AIR
+                b.blink = False
+                tgt = target or self._nearest_player(b)
+                b.target_x, b.target_y = (tgt.x, tgt.y) if tgt else (b.x, b.y)
+                self._broadcast_event("boss_jump")
+        elif b.phase == "air":
+            b.phase_timer -= dt
+            if b.phase_timer > C.BOSS_BLINK:
+                # still tracking: the marker follows the chosen player live
+                if target is not None:
+                    b.target_x, b.target_y = target.x, target.y
+            elif not b.blink:
+                # lock the spot and start the warning blink
+                b.blink = True
+                self._broadcast_event("boss_blink")
+            if b.phase_timer <= 0:
+                b.phase = "falling"
+                b.phase_timer = C.BOSS_FALL
+                b.blink = False
+                b.x, b.y = b.target_x, b.target_y
+                self._broadcast_event("boss_falling")
+        elif b.phase == "falling":
+            b.phase_timer -= dt
+            b.x, b.y = b.target_x, b.target_y
+            if b.phase_timer <= 0:
+                b.phase = "crash"
+                b.phase_timer = C.BOSS_CRASH
+                self._boss_slam(b)
+        elif b.phase == "crash":
+            b.phase_timer -= dt
+            if b.phase_timer <= 0:
+                b.phase = "ground"
+                b.special_cd = C.BOSS_SPECIAL_INTERVAL
+                b.contact_timer = 0.0
+
+    def _tick_minislime(self, e: Enemy, dt: float) -> None:
+        """A mini-slime: chase the nearest player and deal contact damage."""
+        target = self._nearest_player(e)
+        if target is None:
+            return
+        e.facing = math.atan2(target.y - e.y, target.x - e.x)
+        if dist(e.x, e.y, target.x, target.y) > e.radius + C.PLAYER_RADIUS - 4:
+            self._move(e, target, 1, dt)
+        self._contact_attack(e, dt)
+
+    def _contact_attack(self, e: Enemy, dt: float) -> None:
+        """Slime touch damage: every BOSS_CONTACT_INTERVAL a touching player is
+        hit. A player raising their guard parries the touch instead — taking no
+        damage, banking a counter, and shoving the slime back."""
+        e.contact_timer = max(0.0, e.contact_timer - dt)
+        can_hit = e.contact_timer <= 0
+        hit_any = False
+        reach = e.radius + C.PLAYER_RADIUS
+        for rt in self.alive_players():
+            if dist(e.x, e.y, rt.x, rt.y) > reach:
+                continue
+            if rt.parry_active > 0 and rt.invuln <= 0:
+                ang = math.atan2(e.y - rt.y, e.x - rt.x)
+                kb = C.SLIME_PARRY_KNOCKBACK
+                e.x = max(10, min(C.ARENA_W - 10, e.x + math.cos(ang) * kb))
+                e.y = max(10, min(C.ARENA_H - 10, e.y + math.sin(ang) * kb))
+                self._damage_player(rt, e.dmg)  # parry branch: no dmg, banks counter
+                hit_any = True
+            elif can_hit:
+                self._damage_player(rt, e.dmg)
+                hit_any = True
+        if hit_any:
+            e.contact_timer = C.BOSS_CONTACT_INTERVAL
+
+    def _boss_slam(self, b: Enemy) -> None:
+        """The slime lands: shake the screen, splash-damage anyone still on the
+        spot, and scatter slime balls that become mini-slimes."""
+        self._broadcast_event("boss_slam")
+        splash = C.BOSS_SLAM_RADIUS + C.PLAYER_RADIUS
+        for rt in self.alive_players():
+            if dist(b.x, b.y, rt.x, rt.y) <= splash:
+                self._damage_player(rt, b.dmg * C.BOSS_SLAM_MULT)
+        self._spawn_slime_balls(b)
+
+    def _spawn_slime_balls(self, b: Enemy) -> None:
+        n = C.SLIME_BALL_COUNT
+        self._broadcast_event("slime_throw")
+        for i in range(n):
+            ang = (2 * math.pi * i / n) + random.uniform(-0.4, 0.4)
+            reach = random.uniform(120.0, 240.0)
+            tx = max(40, min(C.ARENA_W - 40, b.x + math.cos(ang) * reach))
+            ty = max(40, min(C.ARENA_H - 40, b.y + math.sin(ang) * reach))
+            self.slime_balls.append(SlimeBall(
+                id=self._eid(), sx=b.x, sy=b.y, tx=tx, ty=ty, x=b.x, y=b.y,
+            ))
+
+    def _tick_slime_balls(self, dt: float) -> None:
+        survivors: list[SlimeBall] = []
+        for s in self.slime_balls:
+            s.t += dt
+            u = min(1.0, s.t / s.dur) if s.dur > 0 else 1.0
+            s.x = s.sx + (s.tx - s.sx) * u
+            s.y = s.sy + (s.ty - s.sy) * u - C.SLIME_BALL_ARC * math.sin(math.pi * u)
+            if u >= 1.0:
+                self._broadcast_event("slimeball_land")
+                self._spawn_minislime(s.tx, s.ty)
+            else:
+                survivors.append(s)
+        self.slime_balls = survivors
+
+    def _spawn_minislime(self, x: float, y: float) -> None:
+        if sum(1 for e in self.enemies if e.kind == "minislime") >= C.MINI_SLIME_MAX:
+            return
+        d = self.difficulty
+        hp = C.minislime_hp(d)
+        self.enemies.append(Enemy(
+            id=self._eid(), kind="minislime", x=x, y=y,
+            hp=hp, max_hp=hp, dmg=C.minislime_dmg(d),
+            speed=C.MINI_SLIME_SPEED, rng=0.0, cd=0.0, windup=0.0,
+            radius=C.MINI_SLIME_RADIUS,
+        ))
+
     # ............................................................ projectiles
     def _tick_projectiles(self, dt: float) -> None:
         survivors: list[Projectile] = []
@@ -505,11 +711,13 @@ class World:
                 rt.star_charge += C.STAR_ATK_PER
                 rt.star_crit = min(0.95, rt.star_crit + C.STAR_CRIT_PER)
                 rt.counter_ready = C.PARRY_COUNTER_WINDOW
+                rt.parry_count += 1  # each absorbed hit stacks the star burst
                 rt.invuln = 0.08
                 rt.push_event("parry")
                 return
             rt.parry_active = 0.0
             rt.counter_ready = C.PARRY_COUNTER_WINDOW
+            rt.parry_count = 1
             rt.invuln = 0.25
             rt.push_event("parry")
             return
@@ -543,9 +751,29 @@ class World:
         by.push_event("hit", crit=crit, dmg=int(dmg), x=e.x, y=e.y, eid=e.id)
         if e.kind == "dummy":
             return  # practice dummies soak hits forever; they never die
+        # very slight knockback: shove the enemy a touch away from the attacker
+        # (radially outward from a Two Stars burst). Bosses barely budge.
+        ang = math.atan2(e.y - by.y, e.x - by.x)
+        kb = C.KNOCKBACK_BOSS if e.kind == "boss" else C.KNOCKBACK
+        e.x = max(10, min(C.ARENA_W - 10, e.x + math.cos(ang) * kb))
+        e.y = max(10, min(C.ARENA_H - 10, e.y + math.sin(ang) * kb))
         e.hp -= dmg
         if e.hp <= 0:
             self._kill_enemy(e, by)
+
+    def _emit_dot(self, e: Enemy, dtype: str, color: str) -> None:
+        """Flush a type's banked damage-over-time as one floating number to the
+        player who applied it (if they're still in this world)."""
+        accum = e.burn_accum if dtype == "burn" else e.bleed_accum
+        by = e.burn_by if dtype == "burn" else e.bleed_by
+        whole = int(accum)
+        if whole < 1 or by is None or by.profile.id not in self.players:
+            return
+        by.push_event("dot", dtype=dtype, color=color, dmg=whole, x=e.x, y=e.y, eid=e.id)
+        if dtype == "burn":
+            e.burn_accum -= whole
+        else:
+            e.bleed_accum -= whole
 
     def _kill_enemy(self, e: Enemy, by: PlayerRT) -> None:
         if e not in self.enemies:
@@ -555,6 +783,15 @@ class World:
             self.boss = None
             self._clear_raid(by)
             return
+        if e.kind == "minislime" and self.mode == "raid":
+            # a raid slime add: a boss hazard, no reward of its own. Overworld
+            # invasion slimes fall through and pay out like any other mob.
+            return
+        # only the melee bonehead is actually skull-headed, so it's the only one
+        # that plays the skull death sound (the ranged roundhead and the slimes
+        # are not skulls, so they stay silent on death).
+        if e.kind == "melee":
+            by.push_event("enemy_death", enemy=e.kind, x=e.x, y=e.y)
         exp, gold = C.enemy_reward(self.difficulty)
         # Shared: every alive ally close enough gets the full reward.
         recipients = [
@@ -576,6 +813,8 @@ class World:
         self.ended = True
         d = self.difficulty
         exp, gold = C.boss_reward(d)
+        # The party that downed the boss — announced in everyone's clear banner.
+        party = [rt.profile.nickname for rt in self.players.values()]
         for rt in self.alive_players():
             p = rt.profile
             first = p.cleared_raid < d
@@ -587,7 +826,7 @@ class World:
                 p.dirty = True
             rt.push_event(
                 "raid_clear", difficulty=d, exp=exp, gold=gold,
-                first_clear=first, bonus_gold=bonus,
+                first_clear=first, bonus_gold=bonus, party=party,
             )
             for lvl in leveled:
                 rt.push_event("levelup", level=lvl)
@@ -635,16 +874,7 @@ class World:
                 }
                 for rt in self.players.values()
             ],
-            "enemies": [
-                {
-                    "id": e.id, "kind": e.kind,
-                    "x": round(e.x, 1), "y": round(e.y, 1),
-                    "hp": int(max(0, e.hp)), "maxHp": int(e.max_hp),
-                    "facing": round(e.facing, 3),
-                    "wind": e.windup_timer > 0,
-                }
-                for e in self.enemies
-            ],
+            "enemies": [self._enemy_snap(e) for e in self.enemies],
             "projectiles": [
                 {
                     "id": p.id, "x": round(p.x, 1), "y": round(p.y, 1),
@@ -652,7 +882,84 @@ class World:
                 }
                 for p in self.projectiles
             ],
+            "slimeBalls": [
+                {"id": s.id, "x": round(s.x, 1), "y": round(s.y, 1)}
+                for s in self.slime_balls
+            ],
         }
+
+    @staticmethod
+    def _phase_duration(phase: str) -> float:
+        return {
+            "anticipate": C.BOSS_ANTICIPATE,
+            "air": C.BOSS_AIR,
+            "falling": C.BOSS_FALL,
+            "crash": C.BOSS_CRASH,
+        }.get(phase, 0.0)
+
+    def _enemy_snap(self, e: Enemy) -> dict:
+        d = {
+            "id": e.id, "kind": e.kind,
+            "x": round(e.x, 1), "y": round(e.y, 1),
+            "hp": int(max(0, e.hp)), "maxHp": int(e.max_hp),
+            "facing": round(e.facing, 3),
+            "wind": e.windup_timer > 0,
+        }
+        if e.kind == "boss":
+            dur = self._phase_duration(e.phase)
+            # phase progress 0..1 so the client can drive squish/leap/fall anim
+            d["phase"] = e.phase
+            d["pf"] = round(1 - (e.phase_timer / dur), 3) if dur > 0 else 0.0
+            d["tx"] = round(e.target_x, 1)
+            d["ty"] = round(e.target_y, 1)
+            d["blink"] = e.blink
+        return d
+
+    def _buffs_for(self, rt: PlayerRT) -> list[dict]:
+        """The player's active buffs, for the HUD panel next to the vitals.
+        Each carries a duration (for the countdown bar), a count (e.g. the
+        parry count / syphon stacks) and a description shown on hover."""
+        buffs: list[dict] = []
+        # World-wide slime invasion (same for everyone in the overworld).
+        if self.mode == "overworld" and self.invasion_timer > 0:
+            buffs.append({
+                "key": "invasion", "name": "Slime Invading", "color": "#84cc16",
+                "count": 0,
+                "remaining": round(self.invasion_timer, 1),
+                "duration": C.INVASION_DURATION,
+                "desc": "The overworld is overrun! Enemies spawn faster and "
+                        "mini-slimes are pouring in. Hold out until it passes.",
+            })
+        pw = C.weapon_passive(rt.profile.weapon)
+        if rt.counter_ready > 0:
+            if pw["key"] == "starfall":
+                buffs.append({
+                    "key": "starfall", "name": "Star Charge", "color": "#eab308",
+                    "count": rt.parry_count,
+                    "remaining": round(rt.counter_ready, 2),
+                    "duration": C.PARRY_COUNTER_WINDOW,
+                    "desc": "Each parried hit is banked; your next strike releases a "
+                            "map-wide star burst. Keep parrying to stack more power.",
+                })
+            else:
+                buffs.append({
+                    "key": "counter", "name": "Parry Counter", "color": "#22c55e",
+                    "count": rt.parry_count,
+                    "remaining": round(rt.counter_ready, 2),
+                    "duration": C.PARRY_COUNTER_WINDOW,
+                    "desc": f"Your next slash is an empowered counter dealing "
+                            f"{C.PARRY_BONUS:g}x damage.",
+                })
+        if rt.syphon_stacks > 0:
+            atk = rt.syphon_stacks * C.SCYTHE_SYPHON_ATK
+            crit = int(rt.syphon_stacks * C.SCYTHE_SYPHON_CRIT * 100)
+            buffs.append({
+                "key": "syphon", "name": "Soul Syphon", "color": "#a855f7",
+                "count": rt.syphon_stacks, "remaining": 0, "duration": 0,
+                "desc": f"+{atk} attack and +{crit}% crit from syphoned souls. "
+                        f"Resets on death.",
+            })
+        return buffs
 
     def stats_for(self, pid: int) -> dict | None:
         rt = self.players.get(pid)
@@ -673,4 +980,5 @@ class World:
             "potions": p.potions,
             "clearedRaid": p.cleared_raid,
             "dead": rt.dead,
+            "buffs": self._buffs_for(rt),
         }

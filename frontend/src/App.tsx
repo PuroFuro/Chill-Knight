@@ -44,12 +44,25 @@ export default function App() {
   const seqRef = useRef(1);
   // The overworld difficulty the player is in, so a raid returns them to it.
   const lastOverworldDifficultyRef = useRef(1);
+  // Stashed raid-clear details: the win banner is shown *after* the bounce back
+  // to the overworld (the transition wipes the in-raid toasts), so we carry the
+  // info from the raid_clear event over to the world_closed handler.
+  const raidClearRef = useRef<{
+    difficulty: number;
+    party: string[];
+    exp: number;
+    gold: number;
+    bonus: number;
+    first: boolean;
+  } | null>(null);
 
-  const pushEvent = useCallback(
-    (text: string, tone: GameEvent["tone"]) =>
-      setEvents((es) => [...es.slice(-8), { id: seqRef.current++, text, tone }]),
-    []
-  );
+  // Event toasts fade in, hold, then fade out (matching the ck-toast animation)
+  // and remove themselves so they don't linger on screen forever.
+  const pushEvent = useCallback((text: string, tone: GameEvent["tone"]) => {
+    const id = seqRef.current++;
+    setEvents((es) => [...es.slice(-7), { id, text, tone }]);
+    setTimeout(() => setEvents((es) => es.filter((e) => e.id !== id)), 4200);
+  }, []);
 
   // Floating "+gold / +exp" popups above the player — capped to the last 5,
   // each clearing itself once its rise-and-fade animation finishes.
@@ -57,6 +70,14 @@ export default function App() {
     const id = seqRef.current++;
     setPopups((ps) => [...ps.slice(-4), { id, kind, amount }]);
     setTimeout(() => setPopups((ps) => ps.filter((p) => p.id !== id)), 1500);
+  }, []);
+
+  // Inject a game announcement (e.g. a raid clear) into the bottom-left feed.
+  const pushSystemChat = useCallback((text: string) => {
+    setChat((c) => [
+      ...c.slice(-59),
+      { id: seqRef.current++, from: "", level: 0, text, mine: false, system: true },
+    ]);
   }, []);
 
   const resetWorldState = useCallback(() => {
@@ -173,6 +194,36 @@ export default function App() {
             case "levelup":
               sfx.play("levelUp");
               break;
+            case "enemy_death":
+              sfx.play("skullDeath");
+              break;
+            case "boss_falling":
+              sfx.play("slimeFallingAir");
+              break;
+            case "boss_blink":
+              sfx.play("blinkingLights");
+              break;
+            case "boss_slam":
+              // the big slime finally hits the ground: heavy thud + goopy splat
+              sfx.play("bigSlimeFall");
+              sfx.play("slimeFall");
+              break;
+            case "slimeball_land":
+              sfx.play("slimeFall");
+              break;
+            case "raid_clear":
+              sfx.play("raidWin");
+              // Stash the details; the banner is shown after the overworld
+              // bounce (below) so the transition doesn't wipe it.
+              raidClearRef.current = {
+                difficulty: msg.difficulty as number,
+                party: (msg.party as string[]) ?? [],
+                exp: (msg.exp as number) ?? 0,
+                gold: (msg.gold as number) ?? 0,
+                bonus: (msg.bonus_gold as number) ?? 0,
+                first: Boolean(msg.first_clear),
+              };
+              break;
           }
           handleGameEvent(msg, pushEvent);
           break;
@@ -180,12 +231,30 @@ export default function App() {
           if (msg.reason === "raid_over") {
             // Raid finished (cleared or wiped): drop back into the overworld the
             // player launched from, not the title screen.
-            pushEvent("Raid over — returning to the overworld.", "info");
+            const win = raidClearRef.current;
+            raidClearRef.current = null;
             resetWorldState();
             clientRef.current?.joinWorld(
               "overworld",
               lastOverworldDifficultyRef.current
             );
+            // resetWorldState() cleared the in-raid toasts/chat, so the win
+            // banner is (re)posted here, in the overworld, where it sticks.
+            if (win) {
+              pushEvent(
+                `You have successfully raided a level ${win.difficulty} boss!`,
+                "good"
+              );
+              const who = win.party.length ? win.party.join(", ") : "the party";
+              const reward = `+${win.exp} exp, +${win.gold + win.bonus}g`;
+              pushSystemChat(
+                `Difficulty ${win.difficulty} raid cleared by ${who}! (${reward}${
+                  win.first ? ", first-clear bonus!" : ""
+                })`
+              );
+            } else {
+              pushEvent("Raid over — returning to the overworld.", "info");
+            }
           } else {
             backToTitle();
           }
@@ -201,7 +270,7 @@ export default function App() {
       }
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [player, pushEvent, pushPopup, backToTitle, resetWorldState]
+    [player, pushEvent, pushPopup, pushSystemChat, backToTitle, resetWorldState]
   );
 
   // Open a brand-new connection and drop straight into a world. Used right
@@ -255,6 +324,14 @@ export default function App() {
       .catch(() => localStorage.removeItem("ck_token"));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Background music plays for the whole time the player is in the game world
+  // (overworld or raid) and stops on the title/auth screens.
+  useEffect(() => {
+    if (screen === "game") sfx.startMusic();
+    else sfx.stopMusic();
+    return () => sfx.stopMusic();
+  }, [screen]);
 
   function onAuthed(t: string, p: Player) {
     setToken(t);
@@ -339,30 +416,27 @@ function handleGameEvent(
 ) {
   switch (msg.kind) {
     case "levelup":
-      push(`⬆️ Level up! You are now level ${msg.level}.`, "good");
+      push(`Level up! You are now level ${msg.level}.`, "good");
       break;
     case "death":
       push(
-        `💀 You died. Lost ${msg.gold_lost ?? 0}g and ${msg.exp_lost ?? 0} exp.`,
+        `You died. Lost ${msg.gold_lost ?? 0}g and ${msg.exp_lost ?? 0} exp.`,
         "bad"
       );
       break;
     case "respawn":
-      push("✨ Respawned at full health.", "info");
+      push("Respawned at full health.", "info");
       break;
-    case "raid_clear":
-      push(
-        `🏆 Raid ${msg.difficulty} cleared! +${msg.exp} exp, +${
-          (msg.gold as number) + ((msg.bonus_gold as number) || 0)
-        }g${msg.first_clear ? " (first-clear bonus!)" : ""}`,
-        "good"
-      );
-      break;
+    // "raid_clear" is intentionally not toasted here — the win banner is posted
+    // from the world_closed handler so it survives the bounce to the overworld.
     case "raid_failed":
-      push(`☠️ ${msg.message ?? "Raid failed. No rewards lost."}`, "bad");
+      push(`${msg.message ?? "Raid failed. No rewards lost."}`, "bad");
       break;
     case "info":
       push(String(msg.message ?? ""), "info");
+      break;
+    case "invasion":
+      push(String(msg.message ?? "Slimes are invading!"), "bad");
       break;
     // "hit", "reward", "parry" are intentionally not toasted (too frequent).
   }

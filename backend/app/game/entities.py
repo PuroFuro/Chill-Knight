@@ -82,6 +82,9 @@ class PlayerRT:
     parry_cd: float = 0.0
     parry_active: float = 0.0
     counter_ready: float = 0.0
+    # how many hits are banked behind the current counter (1 for a normal parry;
+    # Two Stars' long parry can absorb several, each adding to the star burst).
+    parry_count: int = 0
     invuln: float = 0.0
     # weapon-passive runtime state
     syphon_stacks: int = 0  # scythe: stacking attack/crit from landed hits
@@ -124,6 +127,18 @@ class Enemy:
     windup_timer: float = 0.0  # >0 while telegraphing (parry window for player)
     target_id: int | None = None
     facing: float = 0.0
+    # --- slime boss / mini-slime state ---
+    # The slime boss runs a small phase machine: "ground" (chase + contact
+    # damage), "anticipate" (squish), "air" (off-screen, marker tracks/blinks),
+    # "falling" (plummeting), "crash" (landed). Mini-slimes only ever chase +
+    # contact and leave `phase` as "ground".
+    phase: str = "ground"
+    phase_timer: float = 0.0   # time left in the current phase
+    special_cd: float = 0.0    # countdown to the next jump-slam special
+    contact_timer: float = 0.0  # countdown between contact-damage ticks
+    target_x: float = 0.0      # locked landing / marker position
+    target_y: float = 0.0
+    blink: bool = False        # True while the landing marker is blinking
     # weapon-passive status effects applied by players
     slow_timer: float = 0.0  # >0 while frost-slowed
     burn_timer: float = 0.0  # >0 while burning (damage over time)
@@ -132,6 +147,12 @@ class Enemy:
     bleed_timer: float = 0.0  # >0 while bleeding (knife damage over time)
     bleed_dps: float = 0.0  # bleed damage per second (fraction of max HP)
     bleed_by: "PlayerRT | None" = None  # who applied the bleed
+    # damage-over-time accumulators: DoT ticks every frame but we only emit a
+    # floating number every DOT_NUMBER_INTERVAL, so the fractional damage is
+    # banked per type until it rounds to a whole number worth showing.
+    burn_accum: float = 0.0
+    bleed_accum: float = 0.0
+    dot_timer: float = C.DOT_NUMBER_INTERVAL
 
 
 @dataclass
@@ -143,6 +164,22 @@ class Projectile:
     vy: float
     dmg: float
     ttl: float = 3.0
+
+
+@dataclass
+class SlimeBall:
+    """A droplet scattered when the slime boss slams down. It arcs from the
+    boss to a landing spot, then turns into a chasing mini-slime."""
+
+    id: int
+    sx: float  # spawn position
+    sy: float
+    tx: float  # landing position
+    ty: float
+    x: float   # current (arced) visual position
+    y: float
+    t: float = 0.0
+    dur: float = C.SLIME_BALL_FLIGHT
 
 
 def dist(ax: float, ay: float, bx: float, by: float) -> float:

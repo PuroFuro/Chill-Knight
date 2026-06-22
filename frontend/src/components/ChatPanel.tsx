@@ -7,6 +7,7 @@ export interface ChatLine {
   level: number; // the world (difficulty) the speaker is in
   text: string;
   mine: boolean;
+  system?: boolean; // a game announcement (e.g. raid cleared), styled distinctly
 }
 
 const IDLE_FADE_MS = 6000; // feed fades out this long after the last message
@@ -89,15 +90,21 @@ export default function ChatPanel({
         {lines.length === 0 && (
           <p className="text-muted">No messages yet. Press T to chat.</p>
         )}
-        {lines.map((l) => (
-          <div key={l.id} className="mb-1 leading-snug">
-            <span className={l.mine ? "font-bold text-ink" : "font-bold text-danger"}>
-              {l.from}
-            </span>{" "}
-            <span className="text-muted">(World {l.level})</span>
-            <span> : {l.text}</span>
-          </div>
-        ))}
+        {lines.map((l) =>
+          l.system ? (
+            <div key={l.id} className="mb-1 font-bold leading-snug text-gold">
+              {l.text}
+            </div>
+          ) : (
+            <div key={l.id} className="mb-1 leading-snug">
+              <span className={l.mine ? "font-bold text-ink" : "font-bold text-danger"}>
+                {l.from}
+              </span>{" "}
+              <span className="text-muted">(World {l.level})</span>
+              <span> : {l.text}</span>
+            </div>
+          )
+        )}
       </div>
 
       {/* Input box always persists. */}

@@ -1,4 +1,4 @@
-import type { StatsMsg } from "../types";
+import type { Buff, StatsMsg } from "../types";
 
 export interface GameEvent {
   id: number;
@@ -54,8 +54,9 @@ export default function Hud({
         )}
       </div>
 
-      {/* bottom-right: vitals */}
+      {/* bottom-right: vitals (with the active-buff tray sitting just above) */}
       <div className="absolute bottom-4 right-4 w-72">
+        <Buffs buffs={stats?.buffs ?? []} />
         <div className="mb-1 text-right text-sm leading-tight">
           <div>Lv : {stats?.level ?? "-"}</div>
           <div>
@@ -93,7 +94,7 @@ export default function Hud({
         {events.slice(-4).map((e) => (
           <div
             key={e.id}
-            className={`rounded-md border border-ink px-3 py-1 text-sm shadow ${
+            className={`ck-toast rounded-md border border-ink px-3 py-1 text-sm shadow ${
               e.tone === "good"
                 ? "bg-hp/80 text-ink"
                 : e.tone === "bad"
@@ -106,6 +107,74 @@ export default function Hud({
         ))}
       </div>
     </>
+  );
+}
+
+// A 1–2 letter glyph for a buff chip, from the initials of its name.
+function buffGlyph(name: string): string {
+  return name
+    .split(/\s+/)
+    .map((w) => w[0])
+    .join("")
+    .slice(0, 2)
+    .toUpperCase();
+}
+
+/**
+ * Active-buff tray shown just above the vitals: one chip per buff with its
+ * stack/parry count, a countdown bar for timed buffs, and a hover tooltip
+ * describing what it does.
+ */
+function Buffs({ buffs }: { buffs: Buff[] }) {
+  if (!buffs.length) return null;
+  return (
+    <div className="pointer-events-auto mb-2 flex flex-wrap justify-end gap-1.5">
+      {buffs.map((b) => {
+        const pct =
+          b.duration > 0 ? Math.max(0, Math.min(1, b.remaining / b.duration)) : 1;
+        return (
+          <div key={b.key} className="group relative">
+            <div
+              className="relative flex h-11 w-11 items-center justify-center rounded-md border-2 bg-panel shadow"
+              style={{ borderColor: b.color }}
+            >
+              <span className="text-sm font-bold" style={{ color: b.color }}>
+                {buffGlyph(b.name)}
+              </span>
+              {/* stack / parry count (hidden for countless buffs like the invasion) */}
+              {b.count > 0 && (
+                <span
+                  className="absolute -right-1.5 -top-1.5 rounded-full px-1 text-[10px] font-bold leading-tight text-paper"
+                  style={{ background: b.color }}
+                >
+                  ×{b.count}
+                </span>
+              )}
+              {/* countdown bar for timed buffs */}
+              {b.duration > 0 && (
+                <div className="absolute inset-x-1 bottom-1 h-1 overflow-hidden rounded bg-black/15">
+                  <div
+                    className="h-full"
+                    style={{ width: `${pct * 100}%`, background: b.color }}
+                  />
+                </div>
+              )}
+            </div>
+            {/* hover tooltip */}
+            <div className="pointer-events-none absolute bottom-full right-0 z-10 mb-2 hidden w-56 rounded-md border border-ink bg-panel p-2 text-left text-xs shadow-lg group-hover:block">
+              <div className="font-bold" style={{ color: b.color }}>
+                {b.name}
+                {b.count > 1 ? ` ×${b.count}` : ""}
+              </div>
+              <div className="mt-0.5 text-muted">{b.desc}</div>
+              {b.duration > 0 && (
+                <div className="mt-1 text-muted">{b.remaining.toFixed(1)}s left</div>
+              )}
+            </div>
+          </div>
+        );
+      })}
+    </div>
   );
 }
 

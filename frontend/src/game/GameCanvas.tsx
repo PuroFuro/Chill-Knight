@@ -8,6 +8,11 @@ import rockUrl from "../assets/Rock.png";
 import rockSmallUrl from "../assets/Rock_Small.png";
 import roundheadUrl from "../assets/Roundhead_Normal.png";
 import dummyUrl from "../assets/Target_Dummy.png";
+import slimeNormalUrl from "../assets/Boss/Slime_Normal.png";
+import slimeJumpUrl from "../assets/Boss/Slime_Jump.png";
+import slimeCrashUrl from "../assets/Boss/Slime_Crash.png";
+import slimeBallUrl from "../assets/Boss/Slime_Ball.png";
+import miniSlimeUrl from "../assets/Boss/Mini_Slime.png";
 import tile1Url from "../assets/Tile_1.png";
 import tile2Url from "../assets/Tile_2.png";
 import knightUrl from "../assets/Knight/Knight_Normal.png";
@@ -22,7 +27,7 @@ import longBladeUrl from "../assets/Weapon/Long Blade.png";
 import scytheUrl from "../assets/Weapon/Scythe.png";
 import twoStarsUrl from "../assets/Weapon/Two Stars.png";
 import type { GameClient } from "../net/socket";
-import type { Snapshot } from "../types";
+import type { SnapEnemy, Snapshot } from "../types";
 
 // Equipped-weapon key -> sword sprite. Weapons without dedicated art (the
 // saber/frost/dragonfang/eclipse tier) fall back to the rusty sword.
@@ -61,9 +66,25 @@ const DMG_CRIT_GLOW_MS = 230; // how long a crit's red glow lasts
 // Practice-dummy bounce when struck (pivots on its base, top sways).
 const DUMMY_BOUNCE_MS = 520;
 
-// Raid-lobby floor tiling.
-const TILE_W = 112;
-const TILE_H = 86;
+// How long a struck enemy glows red to telegraph that it took damage.
+const HIT_FLASH_MS = 200;
+
+// ---- slime raid boss ----------------------------------------------------
+const BOSS_SIZE = 132; // on-screen slime height while grounded
+const MINI_SIZE = 42; // mini-slime height
+const SLIME_BALL_SIZE = 26;
+const SLAM_SHAKE_MS = 600; // screen shake after the slime crashes down
+const SLAM_SHAKE_MAG = 18; // peak shake amplitude (px)
+const SLAM_MARKER_R = 96; // landing-marker radius (px), ~the splash zone
+
+// Raid floor tiling: the grid is sized to divide the arena evenly (so tiles
+// never spill past the edges) and each tile is drawn slightly inset, leaving a
+// thin "grout" gap so they read as individual tiles instead of one big sheet.
+const TILE_COLS = 22;
+const TILE_ROWS = 16;
+const TILE_W = ARENA.w / TILE_COLS;
+const TILE_H = ARENA.h / TILE_ROWS;
+const TILE_GAP = 3;
 
 interface DamageNumber {
   x: number; // world-space spawn (the struck enemy)
@@ -72,6 +93,7 @@ interface DamageNumber {
   dmg: number;
   crit: boolean;
   born: number;
+  color?: string; // set for damage-over-time ticks (orange ignite, crimson bleed)
 }
 
 interface Pickup {
@@ -179,18 +201,16 @@ function genDecor(): Decor[] {
   return out;
 }
 
-// Randomized raid-lobby floor: a grid of Tile_1 / Tile_2 chosen by a stable
-// PRNG so the pattern is fixed for the session (no shimmering), covering the
-// whole arena with a one-tile margin so the edges never show bare paper.
+// Randomized raid floor: a fixed TILE_COLS x TILE_ROWS grid of Tile_1 / Tile_2
+// chosen by a stable PRNG so the pattern is fixed for the session (no
+// shimmering). The grid spans exactly the arena — no tiles outside the play
+// area — so the floor reads as the bounds of the arena.
 function genTileMap(): Uint8Array {
-  const cols = Math.ceil(ARENA.w / TILE_W) + 2;
-  const rows = Math.ceil(ARENA.h / TILE_H) + 2;
   const rng = mulberry32(0x7113);
-  const map = new Uint8Array(cols * rows);
+  const map = new Uint8Array(TILE_COLS * TILE_ROWS);
   for (let i = 0; i < map.length; i++) map[i] = rng() < 0.5 ? 0 : 1;
   return map;
 }
-const TILE_COLS = Math.ceil(ARENA.w / TILE_W) + 2;
 
 export default function GameCanvas({
   client,
@@ -209,9 +229,12 @@ export default function GameCanvas({
   // Two Stars "star burst" shockwaves: each expands outward from where it was
   // released, then fades.
   const shockwaves = useRef<{ x: number; y: number; born: number }[]>([]);
-  // Floating damage numbers, and the last-hit time per dummy (drives its bounce).
+  // Floating damage numbers, and the last-hit time per enemy (drives the dummy
+  // bounce and the brief red damage-flash on living enemies).
   const damageNumbers = useRef<DamageNumber[]>([]);
-  const dummyHits = useRef<Map<number, number>>(new Map());
+  const hitTimes = useRef<Map<number, number>>(new Map());
+  // Screen-shake state, kicked off when the slime boss slams into the ground.
+  const shake = useRef({ mag: 0, until: 0 });
 
   // Sprites + the (stable) decoration field, created once.
   const sprites = useRef<Record<string, HTMLImageElement> | null>(null);
@@ -235,6 +258,11 @@ export default function GameCanvas({
       leg: mk(knightLegUrl),
       sword: mk(rustySwordUrl), // fallback when a weapon has no dedicated art
       dummy: mk(dummyUrl),
+      slimeNormal: mk(slimeNormalUrl),
+      slimeJump: mk(slimeJumpUrl),
+      slimeCrash: mk(slimeCrashUrl),
+      slimeBall: mk(slimeBallUrl),
+      miniSlime: mk(miniSlimeUrl),
       tile1: mk(tile1Url),
       tile2: mk(tile2Url),
     };
@@ -296,7 +324,43 @@ export default function GameCanvas({
       });
       if (damageNumbers.current.length > 60) damageNumbers.current.shift();
       const eid = msg.eid as number | undefined;
-      if (typeof eid === "number") dummyHits.current.set(eid, now);
+      if (typeof eid === "number") hitTimes.current.set(eid, now);
+    });
+    return off;
+  }, [client]);
+
+  // Damage-over-time ticks (burn/bleed): floating numbers tinted by their DoT
+  // type (orange ignite, crimson bleed). These don't flash/bounce the enemy —
+  // that's reserved for the direct-hit telegraph.
+  useEffect(() => {
+    const off = client.on((msg) => {
+      if (msg.type !== "event" || msg.kind !== "dot") return;
+      const x = msg.x as number | undefined;
+      const y = msg.y as number | undefined;
+      if (typeof x !== "number" || typeof y !== "number") return;
+      damageNumbers.current.push({
+        x,
+        y,
+        dx: (Math.random() - 0.5) * 22,
+        dmg: (msg.dmg as number) ?? 0,
+        crit: false,
+        born: performance.now(),
+        color: (msg.color as string) ?? "#f97316",
+      });
+      if (damageNumbers.current.length > 60) damageNumbers.current.shift();
+    });
+    return off;
+  }, [client]);
+
+  // Slime boss slam: shake the screen when the big slime crashes into the
+  // ground (the sound is played by App; this is the visual partner).
+  useEffect(() => {
+    const off = client.on((msg) => {
+      if (msg.type !== "event" || msg.kind !== "boss_slam") return;
+      shake.current = {
+        mag: SLAM_SHAKE_MAG,
+        until: performance.now() + SLAM_SHAKE_MS,
+      };
     });
     return off;
   }, [client]);
@@ -436,21 +500,39 @@ export default function GameCanvas({
       const meSm = snap ? renderState.current.get("p" + playerId) : undefined;
       const camX = meSm ? meSm.x : ARENA.w / 2;
       const camY = meSm ? meSm.y : ARENA.h / 2;
-      const sx = (wx: number) => wx - camX + W / 2;
-      const sy = (wy: number) => wy - camY + H / 2;
+      // screen shake (slime slam): random jitter that decays over its lifetime
+      let shakeX = 0;
+      let shakeY = 0;
+      if (shake.current.until > now) {
+        const k = (shake.current.until - now) / SLAM_SHAKE_MS;
+        const mag = shake.current.mag * k * k; // ease-out decay
+        shakeX = (Math.random() * 2 - 1) * mag;
+        shakeY = (Math.random() * 2 - 1) * mag;
+      }
+      const sx = (wx: number) => wx - camX + W / 2 + shakeX;
+      const sy = (wy: number) => wy - camY + H / 2 + shakeY;
 
       if (snap?.mode === "raid") {
-        // raid lobby / arena floor: a randomized Tile_1 / Tile_2 grid
+        // raid lobby / arena floor: a randomized Tile_1 / Tile_2 grid that spans
+        // exactly the arena. Columns/rows are clamped to the grid so no tiles are
+        // ever drawn outside the play area; each tile is inset by TILE_GAP so a
+        // thin grout line separates them.
         const map = tileMap.current!;
-        const c0 = Math.max(0, Math.floor((camX - W / 2) / TILE_W) - 1);
-        const c1 = Math.floor((camX + W / 2) / TILE_W) + 1;
-        const r0 = Math.max(0, Math.floor((camY - H / 2) / TILE_H) - 1);
-        const r1 = Math.floor((camY + H / 2) / TILE_H) + 1;
+        const c0 = Math.max(0, Math.floor((camX - W / 2) / TILE_W));
+        const c1 = Math.min(TILE_COLS - 1, Math.floor((camX + W / 2) / TILE_W));
+        const r0 = Math.max(0, Math.floor((camY - H / 2) / TILE_H));
+        const r1 = Math.min(TILE_ROWS - 1, Math.floor((camY + H / 2) / TILE_H));
         for (let r = r0; r <= r1; r++) {
           for (let c = c0; c <= c1; c++) {
             const img = map[r * TILE_COLS + c] ? sp.tile2 : sp.tile1;
             if (!img.complete || img.naturalWidth === 0) continue;
-            ctx.drawImage(img, sx(c * TILE_W), sy(r * TILE_H), TILE_W, TILE_H);
+            ctx.drawImage(
+              img,
+              sx(c * TILE_W) + TILE_GAP / 2,
+              sy(r * TILE_H) + TILE_GAP / 2,
+              TILE_W - TILE_GAP,
+              TILE_H - TILE_GAP
+            );
           }
         }
       } else {
@@ -489,11 +571,11 @@ export default function GameCanvas({
           const size = 74;
           const img = sp.dummy;
           let sway = 0;
-          const hit = dummyHits.current.get(e.id);
+          const hit = hitTimes.current.get(e.id);
           if (hit !== undefined) {
             const bt = (now - hit) / DUMMY_BOUNCE_MS;
             if (bt < 1) sway = Math.sin(bt * Math.PI * 3) * (1 - bt) * 0.38;
-            else dummyHits.current.delete(e.id);
+            else hitTimes.current.delete(e.id);
           }
           const footY = ey + size * 0.42;
           shadow(ctx, ex, footY, size * 0.3);
@@ -510,11 +592,52 @@ export default function GameCanvas({
           continue;
         }
 
+        // slime raid boss: its own sprite set + jump-slam telegraph
+        if (e.kind === "boss") {
+          drawSlimeBoss(ctx, sp, e, ex, ey, sx, sy, now, hitTimes.current);
+          continue;
+        }
+
+        // mini-slime add: a small chasing blob that wobbles as it moves
+        if (e.kind === "minislime") {
+          const ht2 = hitTimes.current.get(e.id);
+          let flash2 = 0;
+          if (ht2 !== undefined) {
+            flash2 = Math.max(0, 1 - (now - ht2) / HIT_FLASH_MS);
+            if (flash2 <= 0) hitTimes.current.delete(e.id);
+          }
+          const wob = 1 + Math.sin(now / 130 + e.id) * 0.08;
+          const foot = ey + MINI_SIZE * 0.42;
+          const mflip = Math.cos(sm.facing) < 0;
+          shadow(ctx, ex, foot, MINI_SIZE * 0.36);
+          drawBlob(ctx, sp.miniSlime, ex, foot, MINI_SIZE, 1 / wob, wob, mflip, flash2);
+          bar(
+            ctx,
+            ex - MINI_SIZE * 0.36,
+            foot - MINI_SIZE - 4,
+            MINI_SIZE * 0.72,
+            3,
+            e.hp / e.maxHp,
+            "#a855f7"
+          );
+          continue;
+        }
+
+        // only the basic skull-headed mobs (melee bonehead / ranged roundhead)
+        // reach here — dummies, the slime boss and mini-slimes are drawn above.
         const facing = sm.facing;
         const flip = Math.cos(facing) < 0; // face the target (left vs right)
-        const isBoss = e.kind === "boss";
         const isRanged = e.kind === "ranged";
-        const size = isBoss ? 120 : 46;
+        const size = 46;
+
+        // brief red glow when struck — the visual partner of the knockback,
+        // telegraphing that the enemy just took a hit.
+        const ht = hitTimes.current.get(e.id);
+        let flash = 0;
+        if (ht !== undefined) {
+          flash = Math.max(0, 1 - (now - ht) / HIT_FLASH_MS);
+          if (flash <= 0) hitTimes.current.delete(e.id);
+        }
 
         // advance this enemy's attack-animation phase off the wind edges
         let a = enemyAnim.current.get(e.id);
@@ -542,11 +665,11 @@ export default function GameCanvas({
           shadow(ctx, ex, ey + size * 0.32, size * 0.42);
           // mouth open while winding up and through the recoil
           const mouthOpen = e.wind || a.phase === "recoil";
-          drawSprite(ctx, mouthOpen ? sp.roundheadAttack : sp.roundhead, bx, by, size, flip);
+          drawSprite(ctx, mouthOpen ? sp.roundheadAttack : sp.roundhead, bx, by, size, flip, flash);
           bar(ctx, bx - size * 0.4, by - size * 0.55, size * 0.8, 4, e.hp / e.maxHp, "#dc2626");
         } else {
           shadow(ctx, ex, ey + size * 0.32, size * 0.42);
-          drawSprite(ctx, sp.bonehead, ex, ey, size, flip);
+          drawSprite(ctx, sp.bonehead, ex, ey, size, flip, flash);
           // bone: a slow, small pull-back (anticipation), then a fast elastic
           // strike. Offsets are relative to `facing` so the bone tracks the target.
           let off: number | null = null;
@@ -566,12 +689,6 @@ export default function GameCanvas({
             drawRotatedSprite(ctx, sp.bone, bxp, byp, ang + Math.PI / 4, size * 0.7);
           }
           bar(ctx, ex - size * 0.4, ey - size * 0.55, size * 0.8, 4, e.hp / e.maxHp, "#dc2626");
-          if (isBoss) {
-            ctx.fillStyle = "#111";
-            ctx.font = "bold 12px 'KyivType Serif', serif";
-            ctx.textAlign = "center";
-            ctx.fillText("BOSS", ex, ey - size * 0.6);
-          }
         }
       }
       // forget animation state for enemies that have died/despawned
@@ -592,6 +709,17 @@ export default function GameCanvas({
           ctx.beginPath();
           ctx.arc(px, py, 7, 0, Math.PI * 2);
           ctx.fill();
+        }
+      }
+
+      // slime balls: droplets the boss flings on a slam, arcing out to where
+      // they'll sprout into mini-slimes (their y already carries the arc).
+      if (snap.slimeBalls) {
+        for (const sb of snap.slimeBalls) {
+          const bx = sx(sb.x);
+          const by = sy(sb.y);
+          shadow(ctx, bx, by + SLIME_BALL_SIZE * 0.5, SLIME_BALL_SIZE * 0.3);
+          drawSprite(ctx, sp.slimeBall, bx, by, SLIME_BALL_SIZE);
         }
       }
 
@@ -729,12 +857,20 @@ export default function GameCanvas({
           const alpha = t > 0.66 ? Math.max(0, (1 - t) / 0.34) : 1;
           // crits pop a touch bigger with a brief settle
           const pop = dn.crit ? 1 + Math.max(0, 1 - t * 6) * 0.5 : 1;
-          const fontPx = (dn.crit ? 26 : 18) * pop;
+          const fontPx = (dn.crit ? 26 : dn.color ? 15 : 18) * pop;
           ctx.save();
           ctx.globalAlpha = alpha;
           ctx.font = `bold ${fontPx}px 'KyivType Serif', serif`;
           const text = String(dn.dmg);
-          if (dn.crit) {
+          if (dn.color) {
+            // damage-over-time tick: tinted by its type (orange ignite / crimson
+            // bleed) with a dark outline so it stays legible on the paper floor.
+            ctx.lineWidth = 3;
+            ctx.strokeStyle = "#1a1a1a";
+            ctx.strokeText(text, px, py);
+            ctx.fillStyle = dn.color;
+            ctx.fillText(text, px, py);
+          } else if (dn.crit) {
             // red outline + a short-lived red glow so crits really pop
             const glow = Math.max(0, 1 - (now - dn.born) / DMG_CRIT_GLOW_MS);
             ctx.shadowColor = `rgba(220,38,38,${0.9 * glow})`;
@@ -768,15 +904,39 @@ export default function GameCanvas({
   return <canvas ref={canvasRef} className="h-full w-full" />;
 }
 
+// A red-tinted copy of each sprite, built lazily and cached, used for the
+// damage flash. Tinting via an offscreen canvas keeps the red confined to the
+// sprite's opaque pixels (a plain rect fill would bleed past the silhouette).
+const redTintCache = new Map<HTMLImageElement, HTMLCanvasElement>();
+function redTint(img: HTMLImageElement): HTMLCanvasElement | null {
+  let c = redTintCache.get(img);
+  if (!c) {
+    if (!img.complete || img.naturalWidth === 0) return null;
+    c = document.createElement("canvas");
+    c.width = img.naturalWidth;
+    c.height = img.naturalHeight;
+    const cx = c.getContext("2d")!;
+    cx.drawImage(img, 0, 0);
+    cx.globalCompositeOperation = "source-atop";
+    cx.fillStyle = "#ff2a2a";
+    cx.fillRect(0, 0, c.width, c.height);
+    redTintCache.set(img, c);
+  }
+  return c;
+}
+
 // Draw an image centered at (x, y), scaled to fit within `size` while keeping
-// aspect ratio. Falls back to nothing if the image hasn't loaded yet.
+// aspect ratio. Falls back to nothing if the image hasn't loaded yet. When
+// `flash` (0..1) is set, overlays a red tint + glow so the sprite reads as
+// "just took damage".
 function drawSprite(
   ctx: CanvasRenderingContext2D,
   img: HTMLImageElement,
   x: number,
   y: number,
   size: number,
-  flipX = false
+  flipX = false,
+  flash = 0
 ) {
   if (!img.complete || img.naturalWidth === 0) return;
   const ar = img.naturalWidth / img.naturalHeight;
@@ -784,15 +944,24 @@ function drawSprite(
   let h = size;
   if (ar >= 1) h = size / ar;
   else w = size * ar;
-  if (flipX) {
-    ctx.save();
-    ctx.translate(x, y);
-    ctx.scale(-1, 1);
-    ctx.drawImage(img, -w / 2, -h / 2, w, h);
-    ctx.restore();
-  } else {
-    ctx.drawImage(img, x - w / 2, y - h / 2, w, h);
+  ctx.save();
+  ctx.translate(x, y);
+  if (flipX) ctx.scale(-1, 1);
+  if (flash > 0) {
+    ctx.shadowColor = `rgba(255,40,40,${0.85 * flash})`;
+    ctx.shadowBlur = 14 * flash;
   }
+  ctx.drawImage(img, -w / 2, -h / 2, w, h);
+  if (flash > 0) {
+    ctx.shadowBlur = 0;
+    const tint = redTint(img);
+    if (tint) {
+      ctx.globalAlpha = 0.6 * flash;
+      ctx.drawImage(tint, -w / 2, -h / 2, w, h);
+      ctx.globalAlpha = 1;
+    }
+  }
+  ctx.restore();
 }
 
 // Like drawSprite, but rotates the image around its center by `angle`.
@@ -815,6 +984,150 @@ function drawRotatedSprite(
   ctx.rotate(angle);
   ctx.drawImage(img, -w / 2, -h / 2, w, h);
   ctx.restore();
+}
+
+// Draw a "blob" sprite anchored at its base (footY) with independent X/Y scale,
+// so slimes can squash/stretch toward the ground. `height` is the unscaled
+// on-screen height; the width follows the sprite's aspect ratio.
+function drawBlob(
+  ctx: CanvasRenderingContext2D,
+  img: HTMLImageElement,
+  x: number,
+  footY: number,
+  height: number,
+  sxk: number,
+  syk: number,
+  flip: boolean,
+  flash: number
+) {
+  if (!img.complete || img.naturalWidth === 0) return;
+  const ar = img.naturalWidth / img.naturalHeight;
+  const h = height;
+  const w = height * ar;
+  ctx.save();
+  ctx.translate(x, footY);
+  ctx.scale((flip ? -1 : 1) * sxk, syk); // scale about the base
+  if (flash > 0) {
+    ctx.shadowColor = `rgba(255,40,40,${0.85 * flash})`;
+    ctx.shadowBlur = 16 * flash;
+  }
+  ctx.drawImage(img, -w / 2, -h, w, h);
+  if (flash > 0) {
+    ctx.shadowBlur = 0;
+    const tint = redTint(img);
+    if (tint) {
+      ctx.globalAlpha = 0.6 * flash;
+      ctx.drawImage(tint, -w / 2, -h, w, h);
+      ctx.globalAlpha = 1;
+    }
+  }
+  ctx.restore();
+}
+
+// The slime boss's red landing telegraph: a flattened danger ring with a
+// crosshair, drawn at the spot it's about to crash onto.
+function drawTargetMarker(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  now: number,
+  blinking: boolean
+) {
+  const pulse = 0.6 + 0.4 * Math.sin(now / 120);
+  const alpha = blinking ? 0.95 : 0.45 + 0.35 * pulse;
+  const r = SLAM_MARKER_R;
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.lineWidth = 3;
+  ctx.strokeStyle = `rgba(220,38,38,${alpha})`;
+  ctx.fillStyle = `rgba(220,38,38,${blinking ? 0.22 : 0.1})`;
+  ctx.beginPath();
+  ctx.ellipse(0, 0, r, r * 0.5, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.ellipse(0, 0, r * 0.58, r * 0.29, 0, 0, Math.PI * 2);
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.moveTo(-r, 0);
+  ctx.lineTo(r, 0);
+  ctx.moveTo(0, -r * 0.5);
+  ctx.lineTo(0, r * 0.5);
+  ctx.stroke();
+  ctx.restore();
+}
+
+// Render the slime boss for its current phase: idle wobble on the ground, a
+// squash-and-leap that flies off the top of the screen, a plummet back down
+// onto the locked marker, and a splattered crash. (Sounds + screen shake are
+// driven by the server's boss_* events.)
+function drawSlimeBoss(
+  ctx: CanvasRenderingContext2D,
+  sp: Record<string, HTMLImageElement>,
+  e: SnapEnemy,
+  ex: number,
+  ey: number,
+  sx: (n: number) => number,
+  sy: (n: number) => number,
+  now: number,
+  hitTimes: Map<number, number>
+) {
+  const phase = e.phase ?? "ground";
+  const pf = e.pf ?? 0;
+  const flip = Math.cos(e.facing) < 0;
+  const H = BOSS_SIZE;
+
+  // hit flash while the slime is vulnerable (grounded / crashing)
+  const ht = hitTimes.get(e.id);
+  let flash = 0;
+  if (ht !== undefined) {
+    flash = Math.max(0, 1 - (now - ht) / HIT_FLASH_MS);
+    if (flash <= 0) hitTimes.delete(e.id);
+  }
+
+  // landing marker (screen space) while the slime is airborne / dropping
+  const mx = sx(e.tx ?? 0);
+  const my = sy(e.ty ?? 0);
+  if (phase === "air" || phase === "falling") {
+    const blinking = e.blink ?? false;
+    const on = !blinking || Math.floor(now / 110) % 2 === 0; // flash while blinking
+    if (on) drawTargetMarker(ctx, mx, my, now, blinking);
+  }
+
+  if (phase === "ground") {
+    const wob = 1 + Math.sin(now / 220 + e.id) * 0.04;
+    const foot = ey + H * 0.42;
+    shadow(ctx, ex, foot, H * 0.44);
+    drawBlob(ctx, sp.slimeNormal, ex, foot, H, 1 / wob, wob, flip, flash);
+  } else if (phase === "anticipate") {
+    const squish = Math.sin(pf * Math.PI); // 0 -> 1 -> 0 over the wind-up
+    const syk = 1 - 0.34 * squish;
+    const sxk = 1 + 0.28 * squish;
+    const foot = ey + H * 0.42;
+    shadow(ctx, ex, foot, H * 0.44 * sxk);
+    drawBlob(ctx, sp.slimeJump, ex, foot, H, sxk, syk, flip, flash);
+  } else if (phase === "air") {
+    // leap up and off the top of the screen over the first slice of the phase
+    if (pf < 0.4) {
+      const u = pf / 0.4;
+      const foot = ey + H * 0.42 - u * (ey + H * 8);
+      drawBlob(ctx, sp.slimeJump, ex, foot, H, 1 - u * 0.18, 1 + u * 0.5, flip, 0);
+    }
+    // otherwise the slime is out of view; only the marker remains
+  } else if (phase === "falling") {
+    // plummet from above the screen down onto the locked spot
+    const foot = my + H * 0.42 - (1 - pf) * (my + H * 8);
+    shadow(ctx, mx, my + H * 0.42, H * 0.44 * (0.4 + 0.6 * pf));
+    drawBlob(ctx, sp.slimeJump, mx, foot, H, 0.82, 1.32, flip, 0);
+  } else if (phase === "crash") {
+    // splattered flat, springing back over the recovery window
+    const settle = Math.sin(Math.min(1, pf) * Math.PI);
+    const syk = 0.68 + 0.32 * (1 - settle);
+    const sxk = 1.28 - 0.28 * (1 - settle);
+    const foot = my + H * 0.42;
+    shadow(ctx, mx, foot, H * 0.5);
+    drawBlob(ctx, sp.slimeCrash, mx, foot, H, sxk, syk, flip, flash);
+  }
 }
 
 // Trace an N-point star path (caller sets stroke/fill style and paints it).

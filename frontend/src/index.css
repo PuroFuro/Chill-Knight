@@ -85,3 +85,116 @@ body {
 .ck-chat-fade {
   transition: opacity 1.2s ease-in-out;
 }
+
+/* Event toasts (level up / death / raid cleared …): pop in, hold, then fade
+   away so they don't pile up on screen forever. The 4s here matches the
+   removal timer in App.tsx. */
+@keyframes ck-toast-life {
+  0% {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  6% {
+    opacity: 1;
+    transform: translateY(0);
+  }
+  75% {
+    opacity: 1;
+    transform: translateY(0);
+  }
+  100% {
+    opacity: 0;
+    transform: translateY(-6px);
+  }
+}
+
+.ck-toast {
+  animation: ck-toast-life 4s ease-out forwards;
+}
+
+/* ---- Pop-out / menu open & close transitions --------------------------- */
+/* A strong ease-out used for all the slide animations below. */
+:root {
+  --ck-ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+/* Left hamburger menu: slides in from the left on open, back out on close. */
+@keyframes ck-menu-in {
+  from {
+    transform: translateX(-120%);
+    opacity: 0;
+  }
+  to {
+    transform: translateX(0);
+    opacity: 1;
+  }
+}
+@keyframes ck-menu-out {
+  from {
+    transform: translateX(0);
+    opacity: 1;
+  }
+  to {
+    transform: translateX(-120%);
+    opacity: 0;
+  }
+}
+.ck-menu-in {
+  animation: ck-menu-in 0.28s var(--ck-ease-out) both;
+}
+.ck-menu-out {
+  animation: ck-menu-out 0.26s var(--ck-ease-out) both;
+}
+
+/* Pop-outs (Shop, Inventory, Raid, …): rise up from the bottom of the screen
+   into the centre on open, and slide back down on close. */
+@keyframes ck-pop-up {
+  from {
+    transform: translateY(100vh);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+@keyframes ck-pop-down {
+  from {
+    transform: translateY(0);
+    opacity: 1;
+  }
+  to {
+    transform: translateY(100vh);
+    opacity: 0;
+  }
+}
+.ck-pop-in {
+  animation: ck-pop-up 0.34s var(--ck-ease-out) both;
+}
+.ck-pop-out {
+  animation: ck-pop-down 0.28s var(--ck-ease-out) both;
+}
+
+/* Backdrop dim fades alongside the pop-out it frames. */
+@keyframes ck-fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+@keyframes ck-fade-out {
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0;
+  }
+}
+.ck-backdrop-in {
+  animation: ck-fade-in 0.25s ease-out both;
+}
+.ck-backdrop-out {
+  animation: ck-fade-out 0.28s ease-out both;
+}

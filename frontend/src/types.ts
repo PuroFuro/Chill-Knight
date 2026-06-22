@@ -54,13 +54,25 @@ export interface SnapPlayer {
 
 export interface SnapEnemy {
   id: number;
-  kind: "melee" | "ranged" | "boss" | "dummy";
+  kind: "melee" | "ranged" | "boss" | "dummy" | "minislime";
   x: number;
   y: number;
   hp: number;
   maxHp: number;
   facing: number;
   wind: boolean;
+  // slime boss only: phase machine + landing-marker telegraph
+  phase?: "ground" | "anticipate" | "air" | "falling" | "crash";
+  pf?: number; // 0..1 progress through the current phase (drives anim)
+  tx?: number; // locked landing / marker world position
+  ty?: number;
+  blink?: boolean; // marker is blinking (slime about to drop)
+}
+
+export interface SnapSlimeBall {
+  id: number;
+  x: number;
+  y: number;
 }
 
 export interface Snapshot {
@@ -76,6 +88,17 @@ export interface Snapshot {
   players: SnapPlayer[];
   enemies: SnapEnemy[];
   projectiles: { id: number; x: number; y: number; a: number }[];
+  slimeBalls?: SnapSlimeBall[];
+}
+
+export interface Buff {
+  key: string;
+  name: string;
+  color: string;
+  count: number; // stacks / parry count (1 for a single parry)
+  remaining: number; // seconds left on the buff, 0 if not time-limited
+  duration: number; // full duration, 0 if not time-limited
+  desc: string; // shown on hover
 }
 
 export interface StatsMsg {
@@ -92,6 +115,7 @@ export interface StatsMsg {
   potions: number;
   clearedRaid: number;
   dead: boolean;
+  buffs: Buff[];
 }
 
 export interface ChatMsg {

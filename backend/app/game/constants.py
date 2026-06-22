@@ -39,6 +39,11 @@ PARRY_COOLDOWN = 1.10
 PARRY_BONUS = 2.0  # extra damage multiplier on the counter-attack
 PARRY_COUNTER_WINDOW = 1.5  # how long the "counter ready" buff lasts
 RESPAWN_DELAY = 3.0
+
+# --- Hit feedback ---------------------------------------------------------
+KNOCKBACK = 12.0       # px a struck enemy is shoved back (very slight)
+KNOCKBACK_BOSS = 4.0   # bosses are heavy: only a tiny nudge
+DOT_NUMBER_INTERVAL = 0.5  # seconds between floating damage-over-time numbers
 SHARE_RADIUS = 360.0  # reward-sharing distance for nearby allies
 RAID_HEAL_LIMIT = 3  # potions usable per player per raid
 DEATH_GOLD_LOSS = 0.10
@@ -139,6 +144,17 @@ def max_enemies(players: int) -> int:
     return MAX_ENEMIES_BASE + players * 3
 
 
+# --- Overworld slime invasion --------------------------------------------
+# Rarely the overworld is overrun by slimes for a short stretch: mobs pour in
+# faster and mini-slimes (normally a raid-boss hazard) start marching in. A
+# toast and a "Slime Invading" buff announce it while it lasts.
+INVASION_DURATION = 120.0         # an invasion lasts 2 minutes
+INVASION_ROLL_INTERVAL = 20.0     # how often the overworld rolls to start one
+INVASION_CHANCE = 0.05            # small chance per roll while none is active
+INVASION_SPAWN_MULT = 0.5         # spawn-interval multiplier (lower = faster)
+INVASION_MINISLIME_CHANCE = 0.45  # share of invasion spawns that are mini-slimes
+
+
 # --- Bosses ---------------------------------------------------------------
 def boss_hp(difficulty: int) -> int:
     return int(600 * (1 + 0.55 * (difficulty - 1)))
@@ -146,6 +162,41 @@ def boss_hp(difficulty: int) -> int:
 
 def boss_dmg(difficulty: int) -> float:
     return 14 * (1 + 0.28 * (difficulty - 1))
+
+
+# --- Slime raid boss ------------------------------------------------------
+# The raid boss is a slime with no swing: it deals contact damage on a fixed
+# interval while you touch it (parryable, which shoves it back), and every few
+# seconds performs a jump-slam special that locks onto a player, telegraphs with
+# a blinking target marker, crashes down (screen shake), and scatters slime
+# balls that become chasing mini-slimes.
+BOSS_SPEED = 78.0              # slow ground chase (plus a touch per difficulty)
+BOSS_CONTACT_INTERVAL = 1.0   # seconds between contact-damage ticks
+BOSS_SPECIAL_INTERVAL = 5.0   # seconds between jump-slam specials
+BOSS_ANTICIPATE = 0.45        # squish/wind-up before leaping out of screen
+BOSS_AIR = 1.7                # time spent off-screen while the marker tracks
+BOSS_BLINK = 0.7              # tail of the air phase: marker locked + blinking
+BOSS_FALL = 0.4               # fast plummet from the sky onto the locked spot
+BOSS_CRASH = 0.7              # recovery while the crash sprite is shown
+BOSS_SLAM_RADIUS = 130.0      # landing splash radius
+BOSS_SLAM_MULT = 1.7          # the landing slam hits harder than a touch
+SLIME_PARRY_KNOCKBACK = 64.0  # px the slime is shoved on a parried touch
+
+SLIME_BALL_COUNT = 4          # droplets scattered on each slam
+SLIME_BALL_FLIGHT = 0.8       # seconds a droplet arcs before it lands
+SLIME_BALL_ARC = 130.0        # peak arc height of a thrown droplet (px)
+
+MINI_SLIME_MAX = 8            # cap on concurrent mini-slimes
+MINI_SLIME_SPEED = 156.0
+MINI_SLIME_RADIUS = 16.0
+
+
+def minislime_hp(difficulty: int) -> int:
+    return int(34 * (1 + 0.3 * (difficulty - 1)))
+
+
+def minislime_dmg(difficulty: int) -> float:
+    return 6 * (1 + 0.22 * (difficulty - 1))
 
 
 def boss_reward(difficulty: int) -> tuple[int, int]:

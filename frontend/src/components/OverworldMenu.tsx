@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import type { Player } from "../types";
 import * as sfx from "../sound";
 import ChangeDifficultyPopout from "./popouts/ChangeDifficultyPopout";
@@ -44,7 +44,33 @@ export default function OverworldMenu({
   onLogout: () => void;
 }) {
   const [menuOpen, setMenuOpen] = useState(false);
+  // While closing, the menu stays mounted to play its slide-out animation.
+  const [menuClosing, setMenuClosing] = useState(false);
   const [panel, setPanel] = useState<Panel>(null);
+
+  // Matches the .ck-menu-out duration in index.css.
+  const MENU_EXIT_MS = 260;
+
+  const closeMenu = useCallback(() => {
+    setMenuClosing((c) => {
+      if (c) return c;
+      window.setTimeout(() => {
+        setMenuOpen(false);
+        setMenuClosing(false);
+      }, MENU_EXIT_MS);
+      return true;
+    });
+  }, []);
+
+  const openMenu = useCallback(() => {
+    setMenuClosing(false);
+    setMenuOpen(true);
+  }, []);
+
+  const toggleMenu = useCallback(() => {
+    if (menuOpen && !menuClosing) closeMenu();
+    else openMenu();
+  }, [menuOpen, menuClosing, closeMenu, openMenu]);
 
   // Esc: close an open panel, otherwise toggle the menu.
   useEffect(() => {
@@ -56,15 +82,15 @@ export default function OverworldMenu({
       if (typing) return;
       e.preventDefault();
       if (panel) setPanel(null);
-      else setMenuOpen((o) => !o);
+      else toggleMenu();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [panel]);
+  }, [panel, toggleMenu]);
 
   function open(p: Panel) {
     setPanel(p);
-    setMenuOpen(false);
+    closeMenu();
   }
 
   const items: { label: string; action: () => void }[] = [
@@ -82,7 +108,7 @@ export default function OverworldMenu({
       {/* hamburger */}
       <button
         className="absolute left-4 top-4 flex h-11 w-11 items-center justify-center rounded-md border border-ink bg-panel text-xl hover:bg-black/5"
-        onClick={() => setMenuOpen((o) => !o)}
+        onClick={toggleMenu}
         aria-label="Menu"
       >
         ☰
@@ -90,11 +116,15 @@ export default function OverworldMenu({
 
       {/* menu list */}
       {menuOpen && (
-        <div className="ck-panel absolute left-4 top-4 w-56 p-2">
+        <div
+          className={`ck-panel absolute left-4 top-4 w-56 p-2 ${
+            menuClosing ? "ck-menu-out" : "ck-menu-in"
+          }`}
+        >
           <div className="flex justify-end">
             <button
               className="flex h-5 w-5 items-center justify-center rounded border border-ink text-xs hover:bg-black/5"
-              onClick={() => setMenuOpen(false)}
+              onClick={closeMenu}
               aria-label="Close menu"
             >
               ✕

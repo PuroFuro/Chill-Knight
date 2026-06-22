@@ -18,6 +18,13 @@ import slash1Url from "./assets/sounds/slash1.wav";
 import slash2Url from "./assets/sounds/slash2.wav";
 import slash3Url from "./assets/sounds/slash3.wav";
 import speakingUrl from "./assets/sounds/speaking.mp3";
+import skullDeathUrl from "./assets/sounds/Skull_Death.wav";
+import raidWinUrl from "./assets/sounds/Raid_Win.mp3";
+import bigSlimeFallUrl from "./assets/sounds/Big_Slime_Fall.mp3";
+import slimeFallUrl from "./assets/sounds/Slime_Fall.mp3";
+import slimeFallingAirUrl from "./assets/sounds/Slime_Falling_Air.mp3";
+import blinkingLightsUrl from "./assets/sounds/Blinking_Lights.wav";
+import overworldMusicUrl from "./assets/sounds/Music/overworld.mp3";
 
 export type SoundName =
   | "buyPotion"
@@ -33,7 +40,13 @@ export type SoundName =
   | "parryAttack"
   | "slash1"
   | "slash2"
-  | "slash3";
+  | "slash3"
+  | "skullDeath"
+  | "raidWin"
+  | "bigSlimeFall"
+  | "slimeFall"
+  | "slimeFallingAir"
+  | "blinkingLights";
 
 const URLS: Record<SoundName, string> = {
   buyPotion: buyPotionUrl,
@@ -50,6 +63,12 @@ const URLS: Record<SoundName, string> = {
   slash1: slash1Url,
   slash2: slash2Url,
   slash3: slash3Url,
+  skullDeath: skullDeathUrl,
+  raidWin: raidWinUrl,
+  bigSlimeFall: bigSlimeFallUrl,
+  slimeFall: slimeFallUrl,
+  slimeFallingAir: slimeFallingAirUrl,
+  blinkingLights: blinkingLightsUrl,
 };
 
 // Per-clip tuning: master-relative volume and an optional start offset (the
@@ -63,6 +82,13 @@ const TUNING: Partial<Record<SoundName, { volume?: number; startAt?: number }>> 
   // Parry clips were too loud relative to everything else — pull them down.
   parry: { volume: 0.45 },
   parryAttack: { volume: 0.5 },
+  // The raid-win jingle is mastered quiet — play it at full relative volume.
+  raidWin: { volume: 1.0 },
+  bigSlimeFall: { volume: 0.9 },
+  slimeFall: { volume: 0.8 },
+  slimeFallingAir: { volume: 0.7 },
+  blinkingLights: { volume: 0.6 },
+  skullDeath: { volume: 0.7 },
 };
 
 // Speaking (shopkeeper hum) plays at this fraction of master — bumped up so the
@@ -168,5 +194,87 @@ export function stopSpeaking() {
   if (speakingEl) {
     speakingEl.pause();
     speakingEl.currentTime = 0;
+  }
+}
+
+// ---- background music (looping overworld track) --------------------------
+// Music has its own volume + mute, independent of the SFX master, so players
+// can silence the soundtrack while keeping game sounds (or vice-versa). Both
+// persist between sessions.
+const LS_MUSIC_VOLUME = "ck_music_volume";
+const LS_MUSIC_MUTED = "ck_music_muted";
+
+let musicVolume = loadNumber(LS_MUSIC_VOLUME, 0.5);
+let musicMuted = (() => {
+  try {
+    return localStorage.getItem(LS_MUSIC_MUTED) === "1";
+  } catch {
+    return false;
+  }
+})();
+// Whether the game currently wants music playing (set while in-game); kept so
+// toggling mute off can resume the track without the caller re-invoking it.
+let musicWanted = false;
+let musicEl: HTMLAudioElement | null = null;
+
+function ensureMusicEl(): HTMLAudioElement {
+  if (!musicEl) {
+    musicEl = new Audio(overworldMusicUrl);
+    musicEl.loop = true;
+    musicEl.volume = musicVolume;
+  }
+  return musicEl;
+}
+
+export function getMusicVolume() {
+  return musicVolume;
+}
+
+export function setMusicVolume(v: number) {
+  musicVolume = Math.min(1, Math.max(0, v));
+  try {
+    localStorage.setItem(LS_MUSIC_VOLUME, String(musicVolume));
+  } catch {
+    /* ignore */
+  }
+  if (musicEl) musicEl.volume = musicVolume;
+}
+
+export function isMusicMuted() {
+  return musicMuted;
+}
+
+export function setMusicMuted(v: boolean) {
+  musicMuted = v;
+  try {
+    localStorage.setItem(LS_MUSIC_MUTED, v ? "1" : "0");
+  } catch {
+    /* ignore */
+  }
+  if (musicMuted) {
+    if (musicEl) musicEl.pause();
+  } else if (musicWanted) {
+    startMusic();
+  }
+}
+
+export function startMusic() {
+  musicWanted = true;
+  if (musicMuted) return;
+  const el = ensureMusicEl();
+  el.volume = musicVolume;
+  try {
+    // Browsers reject autoplay before a user gesture; ignore that rejection.
+    void el.play().catch(() => {});
+  } catch {
+    /* ignore */
+  }
+}
+
+export function stopMusic() {
+  musicWanted = false;
+  if (musicEl) {
+    musicEl.pause();
+    musicEl.currentTime = 0;
   }
 }

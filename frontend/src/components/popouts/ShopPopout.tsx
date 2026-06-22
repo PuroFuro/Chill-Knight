@@ -4,6 +4,7 @@ import type { Player, ShopItem } from "../../types";
 import * as sfx from "../../sound";
 import PopoutShell from "./PopoutShell";
 import shopkeeperImg from "../../assets/Shopkeeper.png";
+import shopkeeperTalkImg from "../../assets/Shopkeeper_mouthOpen.png";
 import { WEAPON_SPRITE_URLS } from "../../game/GameCanvas";
 
 // Placeholder shopkeeper personality, one line per item. The real shopkeeper
@@ -57,6 +58,10 @@ export default function ShopPopout({
   const [selected, setSelected] = useState<string | null>(null);
   const [msg, setMsg] = useState("");
   const [typed, setTyped] = useState("");
+  // Whether the shopkeeper's mouth is currently open (flaps as he talks).
+  const [mouthOpen, setMouthOpen] = useState(false);
+  // Whether he's currently speaking (drives the mouth flap on its own timer).
+  const [speaking, setSpeaking] = useState(false);
 
   useEffect(() => {
     api.shop().then(setItems).catch(() => setMsg("Could not load shop"));
@@ -74,19 +79,33 @@ export default function ShopPopout({
     setTyped("");
     let i = 0;
     sfx.startSpeaking();
+    setSpeaking(true);
     const id = window.setInterval(() => {
       i++;
       setTyped(dialogue.slice(0, i));
       if (i >= dialogue.length) {
         window.clearInterval(id);
         sfx.stopSpeaking();
+        setSpeaking(false); // done talking
       }
     }, 28);
     return () => {
       window.clearInterval(id);
       sfx.stopSpeaking();
+      setSpeaking(false);
     };
   }, [dialogue]);
+
+  // Flap the mouth on its own slow timer while he's speaking: open for 0.2s,
+  // closed for 0.2s. Decoupled from the typing speed so it isn't too fast.
+  useEffect(() => {
+    if (!speaking) {
+      setMouthOpen(false); // finish with the mouth closed
+      return;
+    }
+    const id = window.setInterval(() => setMouthOpen((m) => !m), 200);
+    return () => window.clearInterval(id);
+  }, [speaking]);
 
   async function act(fn: Promise<Player>, ok: string, sound: sfx.SoundName) {
     setMsg("");
@@ -113,7 +132,7 @@ export default function ShopPopout({
           wrapper would hide him). */}
       <div className="relative mb-3">
         <img
-          src={shopkeeperImg}
+          src={mouthOpen ? shopkeeperTalkImg : shopkeeperImg}
           alt="Shopkeeper"
           className="pointer-events-none absolute right-2 bottom-[calc(100%+0px)] z-10 w-3/4 select-none object-contain object-bottom"
         />
