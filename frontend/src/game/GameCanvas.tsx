@@ -26,7 +26,7 @@ import knifeUrl from "../assets/Weapon/Knife.png";
 import longBladeUrl from "../assets/Weapon/Long Blade.png";
 import scytheUrl from "../assets/Weapon/Scythe.png";
 import twoStarsUrl from "../assets/Weapon/Two Stars.png";
-import type { GameClient } from "../net/socket";
+import type { GameClient, TouchInputState } from "../net/socket";
 import type { SnapEnemy, Snapshot } from "../types";
 
 // Equipped-weapon key -> sword sprite. Weapons without dedicated art (the
@@ -157,6 +157,15 @@ const PARRY_RECOIL_MS = 220;
 const SMOOTH_TAU = 0.05; // seconds; smaller = snappier
 const SNAP_DIST = 260;
 
+// Local-player prediction: the client simulates ITS OWN knight's movement
+// immediately from input (the same model the server uses), so your own
+// character responds with zero network lag instead of waiting a round-trip.
+// The server stays authoritative — we reconcile to it on big jumps (respawn /
+// knockback) and ease back to it while standing still, so moving never
+// rubber-bands. These two must match the server's constants.py.
+const PLAYER_SPEED = 240; // px/s — must equal C.PLAYER_SPEED
+const PLAYER_RADIUS = 18; // must equal C.PLAYER_RADIUS
+
 // Deterministic PRNG so the grass/rock field is identical every frame (no
 // shimmering) and stable across the whole session.
 function mulberry32(seed: number) {
@@ -217,11 +226,19 @@ export default function GameCanvas({
   snapshotRef,
   playerId,
   inputEnabled,
+  touchInput,
+  isTouch,
 }: {
   client: GameClient;
   snapshotRef: React.MutableRefObject<Snapshot | null>;
   playerId: number;
   inputEnabled: React.MutableRefObject<boolean>;
+  // On touch devices, the on-screen sticks write here so we can predict our own
+  // movement and face the aim stick instantly (mirrors the mouse/keyboard path).
+  touchInput?: React.MutableRefObject<TouchInputState>;
+  // When true, the device is touch-driven: skip the mouse + aim-timer wiring so
+  // synthetic mouse events / the centre-relative aim never fight the sticks.
+  isTouch?: boolean;
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const mouse = useRef({ x: 0, y: 0, down: false });
@@ -279,6 +296,10 @@ export default function GameCanvas({
   const renderState = useRef<Map<string, { x: number; y: number; facing: number }>>(
     new Map()
   );
+  // Local movement input, mirrored from what we send, used to predict our own
+  // knight's position client-side. Plus the running predicted position.
+  const moveInput = useRef({ up: false, down: false, left: false, right: false });
+  const predict = useRef({ x: 0, y: 0, ready: false });
   const lastFrame = useRef(performance.now());
   const decor = useRef<Decor[] | null>(null);
   if (!decor.current) decor.current = genDecor();
@@ -381,20 +402,19 @@ export default function GameCanvas({
   useEffect(() => {
     const keys: Record<string, boolean> = {};
     const apply = () => {
-      if (!inputEnabled.current) {
-        client.setInput({
-          up: false, down: false, left: false, right: false,
-          attack: false, parry: false,
-        });
-        return;
-      }
+      const on = inputEnabled.current;
+      const mv = {
+        up: !!(on && (keys["w"] || keys["arrowup"])),
+        down: !!(on && (keys["s"] || keys["arrowdown"])),
+        left: !!(on && (keys["a"] || keys["arrowleft"])),
+        right: !!(on && (keys["d"] || keys["arrowright"])),
+      };
+      // Record movement for client-side prediction, then send the full intent.
+      moveInput.current = mv;
       client.setInput({
-        up: keys["w"] || keys["arrowup"],
-        down: keys["s"] || keys["arrowdown"],
-        left: keys["a"] || keys["arrowleft"],
-        right: keys["d"] || keys["arrowright"],
-        attack: keys["j"] || mouse.current.down,
-        parry: keys[" "] || keys["k"],
+        ...mv,
+        attack: !!(on && (keys["j"] || mouse.current.down)),
+        parry: !!(on && (keys[" "] || keys["k"])),
       });
     };
 
@@ -414,7 +434,11 @@ export default function GameCanvas({
     window.addEventListener("keydown", down);
     window.addEventListener("keyup", up);
 
+    // Mouse + aim wiring is desktop-only. On touch the on-screen sticks own
+    // movement/aim/attack, and leaving these attached would let the centre-
+    // relative aim (or synthetic mouse events) overwrite the stick input.
     const canvas = canvasRef.current!;
+    let aimTimer = 0;
     const mm = (e: MouseEvent) => {
       const r = canvas.getBoundingClientRect();
       mouse.current.x = e.clientX - r.left;
@@ -428,17 +452,19 @@ export default function GameCanvas({
       mouse.current.down = false;
       apply();
     };
-    canvas.addEventListener("mousemove", mm);
-    canvas.addEventListener("mousedown", md);
-    window.addEventListener("mouseup", mu);
+    if (!isTouch) {
+      canvas.addEventListener("mousemove", mm);
+      canvas.addEventListener("mousedown", md);
+      window.addEventListener("mouseup", mu);
 
-    // Aim points from the screen centre (where the local knight is drawn)
-    // toward the cursor.
-    const aimTimer = window.setInterval(() => {
-      const ax = mouse.current.x - canvas.width / 2;
-      const ay = mouse.current.y - canvas.height / 2;
-      if (ax || ay) client.setInput({ aimX: ax, aimY: ay });
-    }, 50);
+      // Aim points from the screen centre (where the local knight is drawn)
+      // toward the cursor.
+      aimTimer = window.setInterval(() => {
+        const ax = mouse.current.x - canvas.width / 2;
+        const ay = mouse.current.y - canvas.height / 2;
+        if (ax || ay) client.setInput({ aimX: ax, aimY: ay });
+      }, 50);
+    }
 
     return () => {
       window.clearInterval(aimTimer);
@@ -448,7 +474,7 @@ export default function GameCanvas({
       canvas.removeEventListener("mousedown", md);
       window.removeEventListener("mouseup", mu);
     };
-  }, [client, inputEnabled]);
+  }, [client, inputEnabled, isTouch]);
 
   // ---- render loop ----------------------------------------------------
   useEffect(() => {
@@ -485,6 +511,56 @@ export default function GameCanvas({
       if (snap) {
         for (const p of snap.players) {
           liveKeys.add("p" + p.id);
+          if (p.id === playerId) {
+            // Our own knight: predict locally for instant response instead of
+            // chasing the network-delayed server position.
+            const pr = predict.current;
+            const mv = moveInput.current;
+            const ti = touchInput?.current;
+            const inLeft = mv.left || !!ti?.left;
+            const inRight = mv.right || !!ti?.right;
+            const inUp = mv.up || !!ti?.up;
+            const inDown = mv.down || !!ti?.down;
+            const mdx = (inRight ? 1 : 0) - (inLeft ? 1 : 0);
+            const mdy = (inDown ? 1 : 0) - (inUp ? 1 : 0);
+            const moving = (mdx !== 0 || mdy !== 0) && !p.dead;
+            if (!pr.ready || p.dead) {
+              // (Re)sync to the authoritative position (first frame, respawn).
+              pr.x = p.x;
+              pr.y = p.y;
+              pr.ready = true;
+            } else {
+              if (moving) {
+                const m = Math.hypot(mdx, mdy);
+                pr.x += (mdx / m) * PLAYER_SPEED * dt;
+                pr.y += (mdy / m) * PLAYER_SPEED * dt;
+                pr.x = Math.max(PLAYER_RADIUS, Math.min(ARENA.w - PLAYER_RADIUS, pr.x));
+                pr.y = Math.max(PLAYER_RADIUS, Math.min(ARENA.h - PLAYER_RADIUS, pr.y));
+              }
+              const ex = p.x - pr.x;
+              const ey = p.y - pr.y;
+              if (ex * ex + ey * ey > SNAP_DIST * SNAP_DIST) {
+                pr.x = p.x; // big divergence (knockback / teleport) -> snap
+                pr.y = p.y;
+              } else if (!moving) {
+                pr.x += ex * k; // settle to the server only while standing still
+                pr.y += ey * k;
+              }
+            }
+            // Aim instantly (no round-trip for facing): the touch aim stick
+            // while it's held, otherwise the cursor, otherwise the server's last.
+            let facing: number;
+            if (ti?.aiming) {
+              facing = Math.atan2(ti.aimY, ti.aimX);
+            } else {
+              const aimed = mouse.current.x !== 0 || mouse.current.y !== 0;
+              facing = aimed
+                ? Math.atan2(mouse.current.y - H / 2, mouse.current.x - W / 2)
+                : p.facing;
+            }
+            renderState.current.set("p" + p.id, { x: pr.x, y: pr.y, facing });
+            continue;
+          }
           smoothPos(renderState.current, "p" + p.id, p.x, p.y, p.facing, k);
         }
         for (const e of snap.enemies) {
@@ -901,7 +977,7 @@ export default function GameCanvas({
     };
   }, [playerId, snapshotRef]);
 
-  return <canvas ref={canvasRef} className="h-full w-full" />;
+  return <canvas ref={canvasRef} className="h-full w-full touch-none select-none" />;
 }
 
 // A red-tinted copy of each sprite, built lazily and cached, used for the

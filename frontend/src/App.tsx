@@ -9,9 +9,11 @@ import LeaderboardToggle from "./components/LeaderboardToggle";
 import OverworldMenu from "./components/OverworldMenu";
 import RaidLobby from "./components/RaidLobby";
 import TitleScreen from "./components/TitleScreen";
+import TouchControls from "./components/TouchControls";
 import GameCanvas from "./game/GameCanvas";
-import { GameClient } from "./net/socket";
+import { GameClient, type TouchInputState } from "./net/socket";
 import * as sfx from "./sound";
+import { useIsTouch } from "./useIsTouch";
 import type { Player, ServerMsg, Snapshot, StatsMsg } from "./types";
 
 type Screen = "title" | "login" | "register" | "about" | "game";
@@ -37,9 +39,16 @@ export default function App() {
   const [chat, setChat] = useState<ChatLine[]>([]);
   const [popups, setPopups] = useState<KillPopup[]>([]);
 
+  const isTouch = useIsTouch();
   const clientRef = useRef<GameClient | null>(null);
   const snapshotRef = useRef<Snapshot | null>(null);
   const inputEnabledRef = useRef(true);
+  // On-screen-stick input (touch devices), shared with the canvas for local
+  // prediction + instant facing.
+  const touchInputRef = useRef<TouchInputState>({
+    up: false, down: false, left: false, right: false,
+    aimX: 1, aimY: 0, aiming: false,
+  });
   const playerIdRef = useRef(0);
   const seqRef = useRef(1);
   // The overworld difficulty the player is in, so a raid returns them to it.
@@ -363,6 +372,16 @@ export default function App() {
           snapshotRef={snapshotRef}
           playerId={playerIdRef.current}
           inputEnabled={inputEnabledRef}
+          touchInput={touchInputRef}
+          isTouch={isTouch}
+        />
+      )}
+
+      {isTouch && clientRef.current && (
+        <TouchControls
+          client={clientRef.current}
+          touchRef={touchInputRef}
+          enabledRef={inputEnabledRef}
         />
       )}
 
@@ -371,6 +390,7 @@ export default function App() {
         meta={{ ...meta, started }}
         boss={boss}
         events={events}
+        isTouch={isTouch}
         onPotion={() => clientRef.current?.usePotion()}
       />
 
@@ -401,6 +421,7 @@ export default function App() {
 
       <ChatPanel
         lines={chat}
+        compact={isTouch}
         onSend={(t) => clientRef.current?.chat(t)}
         onTypingChange={(typing) => {
           inputEnabledRef.current = !typing;

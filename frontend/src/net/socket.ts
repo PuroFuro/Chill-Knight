@@ -12,6 +12,21 @@ export interface InputState {
   aimY: number;
 }
 
+// Touch-control state shared with the canvas so the local knight can predict
+// its own movement and face the aim stick instantly — the same role the
+// keyboard/mouse refs play on desktop. Movement is the same 4 booleans the
+// server reads; `aiming` is true while the right stick is held so facing tracks
+// it live (when released we keep the last aim, like a resting mouse cursor).
+export interface TouchInputState {
+  up: boolean;
+  down: boolean;
+  left: boolean;
+  right: boolean;
+  aimX: number;
+  aimY: number;
+  aiming: boolean;
+}
+
 type Handler = (msg: ServerMsg) => void;
 
 export class GameClient {

@@ -21,10 +21,15 @@ export default function ChatPanel({
   lines,
   onSend,
   onTypingChange,
+  compact = false,
 }: {
   lines: ChatLine[];
   onSend: (text: string) => void;
   onTypingChange: (typing: boolean) => void;
+  // On touch: shrink the panel, lift it above the movement stick, and make the
+  // wrapper click-through so only the feed/input (not their bounding box)
+  // intercept touches meant for the joystick beneath.
+  compact?: boolean;
 }) {
   const [text, setText] = useState("");
   const [hovered, setHovered] = useState(false);
@@ -77,15 +82,17 @@ export default function ChatPanel({
 
   return (
     <div
-      className="absolute bottom-4 left-4 flex w-80 flex-col gap-2"
+      className={`absolute left-4 flex flex-col gap-2 ${
+        compact ? "pointer-events-none bottom-28 w-56" : "bottom-4 w-80"
+      }`}
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
     >
       <div
         ref={feedRef}
-        className={`ck-chat-fade h-40 overflow-y-auto rounded-md border border-ink bg-black/5 px-3 py-2 text-sm ${
-          feedVisible ? "opacity-100" : "pointer-events-none opacity-0"
-        }`}
+        className={`ck-chat-fade overflow-y-auto rounded-md border border-ink bg-black/5 px-3 py-2 text-sm ${
+          compact ? "h-28" : "h-40"
+        } ${feedVisible ? "pointer-events-auto opacity-100" : "pointer-events-none opacity-0"}`}
       >
         {lines.length === 0 && (
           <p className="text-muted">No messages yet. Press T to chat.</p>
@@ -108,7 +115,7 @@ export default function ChatPanel({
       </div>
 
       {/* Input box always persists. */}
-      <form onSubmit={submit} className="flex items-center gap-1">
+      <form onSubmit={submit} className="pointer-events-auto flex items-center gap-1">
         <input
           ref={inputRef}
           className="ck-input text-sm"
