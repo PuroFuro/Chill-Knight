@@ -1,0 +1,29 @@
+# Render Blueprint for the Chill Knight backend.
+# In Render: New -> Blueprint -> pick this repo. It builds backend/Dockerfile and
+# runs ONE always-on instance (required — world state lives in process memory).
+#
+# After it deploys, set DATABASE_URL and CORS_ORIGINS in the service's
+# Environment tab (they're marked sync:false so they're never committed).
+#
+# Note: the free plan sleeps after ~15 min idle and cold-starts on the next
+# request. Account progress is safe (it's flushed to Supabase every few seconds);
+# only live, in-progress world state resets — which is fine, worlds are ephemeral
+# and rebuilt on join. Pick a paid instance type if you want it always warm.
+services:
+  - type: web
+    name: chill-knight-backend
+    runtime: docker
+    dockerfilePath: ./backend/Dockerfile
+    dockerContext: ./backend
+    plan: free
+    healthCheckPath: /api/health
+    autoDeploy: true
+    envVars:
+      # Auto-generated strong secret for signing auth tokens.
+      - key: SECRET_KEY
+        generateValue: true
+      # Set these two yourself in the dashboard:
+      - key: DATABASE_URL      # your Supabase postgresql+asyncpg URL
+        sync: false
+      - key: CORS_ORIGINS      # your Vercel URL, e.g. https://chill-knight.vercel.app
+        sync: false

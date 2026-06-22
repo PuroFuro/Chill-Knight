@@ -10,6 +10,7 @@ pydantic>=2.11
 pydantic-settings>=2.6
 python-dotenv>=1.0
 
-# PostgreSQL driver (the spec's target DB). Installed separately because it
-# is a C extension without wheels for every brand-new Python release:
-#   pip install -r requirements-postgres.txt
+# PostgreSQL async driver — required for Supabase, the production database.
+# Bundled here so a single `pip install -r requirements.txt` is deploy-ready.
+# (aiosqlite above stays only as the zero-setup local-dev fallback.)
+asyncpg>=0.30
