@@ -1,11 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "./api";
 import About from "./components/About";
-import Auth from "./components/Auth";
 import ChatPanel, { type ChatLine } from "./components/ChatPanel";
 import Hud, { type GameEvent } from "./components/Hud";
 import KillPopups, { type KillPopup } from "./components/KillPopups";
-import LeaderboardToggle from "./components/LeaderboardToggle";
 import OverworldMenu from "./components/OverworldMenu";
 import RaidLobby from "./components/RaidLobby";
 import TitleScreen from "./components/TitleScreen";
@@ -16,13 +14,12 @@ import * as sfx from "./sound";
 import { useIsTouch } from "./useIsTouch";
 import type { Player, ServerMsg, Snapshot, StatsMsg } from "./types";
 
-type Screen = "title" | "login" | "register" | "about" | "game";
+type Screen = "title" | "about" | "game";
 
 const clampDifficulty = (n: number) => Math.max(1, Math.min(50, Math.round(n)));
 
 export default function App() {
   const [screen, setScreen] = useState<Screen>("title");
-  const [token, setToken] = useState("");
   const [player, setPlayer] = useState<Player | null>(null);
 
   const [stats, setStats] = useState<StatsMsg | null>(null);
@@ -100,30 +97,18 @@ export default function App() {
     inputEnabledRef.current = true;
   }, []);
 
-  // Return to the title screen (Leave) — keeps the session/token alive.
+  // Return to the title screen (Leave). Keeps local progress (it's persisted).
   const backToTitle = useCallback(async () => {
     clientRef.current?.close();
     clientRef.current = null;
     resetWorldState();
-    if (token) {
-      try {
-        setPlayer(await api.me(token));
-      } catch {
-        /* keep last known */
-      }
+    try {
+      setPlayer(await api.me());
+    } catch {
+      /* keep last known */
     }
     setScreen("title");
-  }, [token, resetWorldState]);
-
-  function doLogout() {
-    clientRef.current?.close();
-    clientRef.current = null;
-    localStorage.removeItem("ck_token");
-    setToken("");
-    setPlayer(null);
-    resetWorldState();
-    setScreen("title");
-  }
+  }, [resetWorldState]);
 
   const handleMsg = useCallback(
     (msg: ServerMsg) => {
@@ -148,7 +133,7 @@ export default function App() {
           setStats(msg);
           // Keep the cached player roughly in sync with live stats so the
           // pop-outs see current gold/level/gear (owned_weapons only changes via
-          // the REST buy/equip path, so it's preserved here).
+          // the buy/equip path, so it's preserved here).
           setPlayer((p) =>
             p
               ? {
@@ -169,7 +154,7 @@ export default function App() {
           break;
         case "chat": {
           const mine = msg.from === player?.nickname;
-          if (!mine) sfx.play("messagePop"); // someone else (any world) spoke
+          if (!mine) sfx.play("messagePop");
           setChat((c) => [
             ...c.slice(-59),
             {
@@ -273,8 +258,7 @@ export default function App() {
           backToTitle();
           break;
         case "kicked":
-          alert(msg.message);
-          doLogout();
+          backToTitle();
           break;
       }
     },
@@ -282,33 +266,22 @@ export default function App() {
     [player, pushEvent, pushPopup, pushSystemChat, backToTitle, resetWorldState]
   );
 
-  // Open a brand-new connection and drop straight into a world. Used right
-  // after auth / session-resume. `authToken` lets us pass the freshly issued
-  // token before React state has settled.
+  // Open a brand-new connection and drop straight into a world.
   const enterGame = useCallback(
-    async (mode: "overworld" | "raid", difficulty: number, authToken?: string) => {
-      const t = authToken ?? token;
+    (mode: "overworld" | "raid", difficulty: number) => {
       const client = new GameClient();
       clientRef.current = client;
       client.on(handleMsg);
-      try {
-        await client.connect(t);
-      } catch {
-        pushEvent("Could not connect to the game server.", "bad");
-        clientRef.current = null;
-        return;
-      }
       resetWorldState();
       setMeta({ mode, difficulty, code: null });
       setScreen("game");
       client.joinWorld(mode, difficulty);
     },
-    [token, handleMsg, pushEvent, resetWorldState]
+    [handleMsg, resetWorldState]
   );
 
-  // Switch the current connection to another world (change difficulty, create
-  // or join a raid) without reconnecting. The server detaches us from the old
-  // world before adding us to the new one, so we're never in two at once.
+  // Switch the current world (change difficulty, create/join a raid) without
+  // making a new client.
   const reenter = useCallback(
     (mode: "overworld" | "raid", difficulty: number, code?: string) => {
       const client = clientRef.current;
@@ -319,46 +292,25 @@ export default function App() {
     [resetWorldState]
   );
 
-  // resume an existing session straight into the overworld
+  // Load the local save once so the menus/pop-outs have the player's profile.
   useEffect(() => {
-    const t = localStorage.getItem("ck_token");
-    if (!t) return;
-    api
-      .me(t)
-      .then((p) => {
-        setToken(t);
-        setPlayer(p);
-        enterGame("overworld", clampDifficulty(p.level), t);
-      })
-      .catch(() => localStorage.removeItem("ck_token"));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    api.me().then(setPlayer).catch(() => {});
   }, []);
 
   // Background music plays for the whole time the player is in the game world
-  // (overworld or raid) and stops on the title/auth screens.
+  // (overworld or raid) and stops on the title/about screens.
   useEffect(() => {
     if (screen === "game") sfx.startMusic();
     else sfx.stopMusic();
     return () => sfx.stopMusic();
   }, [screen]);
 
-  function onAuthed(t: string, p: Player) {
-    setToken(t);
-    setPlayer(p);
-    enterGame("overworld", clampDifficulty(p.level), t);
+  function onPlay() {
+    enterGame("overworld", clampDifficulty(player?.level ?? 1));
   }
 
   if (screen === "title") {
-    return (
-      <TitleScreen
-        onRegister={() => setScreen("register")}
-        onLogin={() => setScreen("login")}
-        onAbout={() => setScreen("about")}
-      />
-    );
-  }
-  if (screen === "login" || screen === "register") {
-    return <Auth mode={screen} onAuthed={onAuthed} onBack={() => setScreen("title")} />;
+    return <TitleScreen onPlay={onPlay} onAbout={() => setScreen("about")} />;
   }
   if (screen === "about") {
     return <About onBack={() => setScreen("title")} />;
@@ -404,18 +356,16 @@ export default function App() {
 
       {player && (
         <OverworldMenu
-          token={token}
+          token=""
           player={player}
           onPlayer={setPlayer}
           meta={{ difficulty: meta.difficulty }}
           onCreateRaid={() => reenter("raid", meta.difficulty)}
           onJoinRaid={(code) => reenter("raid", meta.difficulty, code)}
           onChangeDifficulty={(d) => reenter("overworld", clampDifficulty(d))}
-          onLogout={doLogout}
+          onLogout={backToTitle}
         />
       )}
-
-      {meta.mode === "overworld" && <LeaderboardToggle />}
 
       <KillPopups popups={popups} />
 

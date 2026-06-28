@@ -12,10 +12,10 @@ export default function About({ onBack }: { onBack: () => void }) {
         <div className="flex-1">
           <h2 className="ck-wordmark text-4xl">Chill Knight</h2>
           <p className="mt-3 max-w-md text-sm leading-relaxed">
-            Chill Knight is a web-based, real-time multiplayer game where you
-            slay wandering mobs, party up for raid bosses, level up your knight,
-            and climb the leaderboard. Wander the overworld, stay chill, and see
-            how far you can push the difficulty.
+            Chill Knight is a web-based action game where you slay wandering
+            mobs, take on raid bosses, level up your knight, and grow your
+            arsenal. Wander the overworld, stay chill, and see how far you can
+            push the difficulty.
             {/* TODO(PuroFuro): replace with your final About copy. */}
           </p>
           <p className="mt-10 text-lg">@PuroFuro</p>

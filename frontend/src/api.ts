@@ -1,77 +1,97 @@
+// Local, offline "API". This used to call a backend over HTTP; now the shop
+// catalog comes from the ported game constants and purchases mutate the local
+// save (src/game/sim/profile.ts). All methods are async to preserve the old
+// call sites (which `await` them), but nothing leaves the browser.
+
 import type { LeaderboardEntry, Player, ShopItem } from "./types";
+import * as C from "./game/sim/constants";
+import { getProfile, profileToPlayer, saveProfile } from "./game/sim/profile";
 
-// Base URL for the backend. Leave VITE_API_URL empty to talk to the same origin
-// the page is served from (e.g. behind the Vite proxy / a single tunnel); set it
-// to an absolute URL to point at a separately-hosted backend.
-export const API_URL =
-  (import.meta.env.VITE_API_URL as string | undefined) ?? "http://localhost:8000";
-
-export const WS_URL = API_URL
-  ? API_URL.replace(/^http/, "ws") + "/ws"
-  : `${window.location.protocol === "https:" ? "wss" : "ws"}://${
-      window.location.host
-    }/ws`;
-
-async function request<T>(
-  path: string,
-  opts: RequestInit = {},
-  token?: string
-): Promise<T> {
-  const res = await fetch(API_URL + path, {
-    ...opts,
-    headers: {
-      "Content-Type": "application/json",
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      ...(opts.headers ?? {}),
-    },
-  });
-  if (!res.ok) {
-    let detail = res.statusText;
-    try {
-      detail = (await res.json()).detail ?? detail;
-    } catch {
-      /* ignore */
-    }
-    throw new Error(detail);
+function shopCatalog(): ShopItem[] {
+  const items: ShopItem[] = [];
+  for (const [key, w] of Object.entries(C.WEAPONS)) {
+    items.push({
+      key,
+      name: w.name,
+      kind: "weapon",
+      price: w.price,
+      attack: w.attack,
+      crit_bonus: w.crit_bonus,
+      requires_raid: w.requires_raid,
+      description: w.description,
+      passive: C.passiveText(key),
+    });
   }
-  return res.json() as Promise<T>;
-}
-
-export interface AuthResponse {
-  token: string;
-  player: Player;
+  items.push({
+    key: C.POTION_KEY,
+    name: C.POTION.name,
+    kind: "potion",
+    price: C.POTION.price,
+    attack: 0,
+    crit_bonus: 0,
+    requires_raid: 0,
+    description: C.POTION.description,
+    passive: "",
+  });
+  return items;
 }
 
 export const api = {
-  register: (nickname: string, password: string) =>
-    request<AuthResponse>("/api/auth/register", {
-      method: "POST",
-      body: JSON.stringify({ nickname, password }),
-    }),
+  // `_token` params are ignored — kept only so existing call sites that still
+  // pass the old auth token type-check unchanged.
+  me: async (_token?: string): Promise<Player> => profileToPlayer(),
 
-  login: (nickname: string, password: string) =>
-    request<AuthResponse>("/api/auth/login", {
-      method: "POST",
-      body: JSON.stringify({ nickname, password }),
-    }),
+  shop: async (): Promise<ShopItem[]> => shopCatalog(),
 
-  me: (token: string) => request<Player>("/api/auth/me", {}, token),
+  buy: async (key: string, _token?: string): Promise<Player> => {
+    const target = getProfile();
+    if (key === C.POTION_KEY) {
+      const price = C.POTION.price;
+      if (target.gold < price) throw new Error("Not enough gold");
+      target.gold -= price;
+      target.potions += 1;
+    } else if (key in C.WEAPONS) {
+      const w = C.WEAPONS[key];
+      if (target.owned_weapons.includes(key)) {
+        throw new Error("You already own that weapon");
+      }
+      if (target.cleared_raid < w.requires_raid) {
+        throw new Error(`Requires raid difficulty ${w.requires_raid} cleared`);
+      }
+      if (target.gold < w.price) throw new Error("Not enough gold");
+      target.gold -= w.price;
+      target.owned_weapons.push(key);
+    } else {
+      throw new Error("No such item");
+    }
+    target.dirty = true;
+    saveProfile();
+    return profileToPlayer(target);
+  },
 
-  shop: () => request<ShopItem[]>("/api/shop", {}),
+  equip: async (key: string, _token?: string): Promise<Player> => {
+    const target = getProfile();
+    if (!target.owned_weapons.includes(key)) {
+      throw new Error("You don't own that weapon");
+    }
+    target.weapon = key;
+    target.dirty = true;
+    saveProfile();
+    return profileToPlayer(target);
+  },
 
-  buy: (key: string, token: string) =>
-    request<Player>(
-      "/api/shop/buy",
-      { method: "POST", body: JSON.stringify({ key }) },
-      token
-    ),
-
-  equip: (key: string, token: string) =>
-    request<Player>(
-      "/api/shop/equip",
-      { method: "POST", body: JSON.stringify({ key }) },
-      token
-    ),
-
-  leaderboard: () => request<LeaderboardEntry[]>("/api/leaderboard", {}),
+  // Single-player: the "leaderboard" is just you. Kept so the existing widget
+  // (if mounted) still renders without a server.
+  leaderboard: async (): Promise<LeaderboardEntry[]> => {
+    const p = getProfile();
+    return [
+      {
+        rank: 1,
+        nickname: p.nickname,
+        level: p.level,
+        cleared_raid: p.cleared_raid,
+        gold: p.gold,
+      },
+    ];
+  },
 };

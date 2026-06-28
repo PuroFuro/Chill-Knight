@@ -10,9 +10,9 @@ export default function HowToPlayPopout({ onClose }: { onClose: () => void }) {
       <h2 className="mb-3 pr-8 font-display text-xl font-bold">How to Play</h2>
 
       <p className="mb-3 text-sm text-muted">
-        Wander the overworld and slay mobs to earn exp and gold. Kills near
-        allies are shared. Raids spawn a boss — the first clear pays a bonus and
-        unlocks gear. Push the difficulty as high as you dare.
+        Wander the overworld and slay mobs to earn exp and gold. Raids spawn a
+        boss — the first clear pays a bonus. Push the difficulty as high as you
+        dare.
       </p>
 
       <ul className="space-y-1.5 text-sm">
@@ -23,7 +23,6 @@ export default function HowToPlayPopout({ onClose }: { onClose: () => void }) {
         <Key k="H" v="Drink a health potion" />
         <Key k="T" v="Open chat and type" />
         <Key k="Esc" v="Open / close the menu" />
-        <Key k="L" v="Toggle the leaderboard" />
       </ul>
 
       <p className="mt-4 text-xs text-muted">
